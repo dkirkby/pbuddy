@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-This project is in the **planning phase** — documentation exists but no implementation code has been written yet. The three key documents to read before making any implementation decisions are:
+Milestone 1 (Pass 1 end-to-end: upload → run → review → accept) is implemented. Key reference documents:
 
 - `VISION.md` — requirements and accuracy targets
 - `PIPELINE.md` — the 4-pass processing pipeline with user correction workflows
-- `ARCHITECTURE.md` — detailed implementation blueprint (technology stack, data models, API design, module layout)
+- `ARCHITECTURE.md` — detailed implementation blueprint
 
-## Planned Technology Stack
+## Technology Stack
 
 **Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`)
 
@@ -18,25 +18,28 @@ This project is in the **planning phase** — documentation exists but no implem
 
 **Persistence:** SQLite + SQLAlchemy 2.x
 
-**Pipeline libraries:** NumPy, SciPy, OpenCV, PyAV, ffmpeg, Pydantic; optional Torch/ONNXRuntime
+**Pipeline libraries:** NumPy, SciPy, OpenCV, PyAV, ffmpeg, Pydantic
 
-## Commands (once implemented)
+## Commands
 
 ```bash
-# Install Python dependencies
+# First-time setup: install Python deps (uv manages its own Python via .python-version)
 uv sync
 
-# Start the backend API server
-uv run uvicorn pbva_api.main:app --reload
+# Start the backend API server (also spawns the worker subprocess)
+./scripts/dev_api.sh
 
 # Start the frontend dev server
-cd apps/frontend && npm run dev
+./scripts/dev_frontend.sh
 
 # Run backend tests
 uv run pytest
 
 # Run a single test
 uv run pytest tests/path/to/test_file.py::test_name
+
+# Run the slow smoke test on test.mp4
+uv run pytest tests/integration/test_pass1_smoke.py -m slow -v -s
 ```
 
 ## Architecture Overview
