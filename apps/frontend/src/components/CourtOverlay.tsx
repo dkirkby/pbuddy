@@ -20,7 +20,7 @@ type CornerKey = keyof CourtGeometry
 const CORNER_KEYS: CornerKey[] = ['top_left', 'top_right', 'bottom_left', 'bottom_right']
 
 // Normalized court coordinates: u ∈ [0,1] left→right, v ∈ [0,1] top→bottom.
-const KV = 7 / 44  // kitchen line distance from each baseline (normalized)
+const KV = (22 - 7) / 44  // kitchen line at 7ft from net (net at 22ft), normalized
 
 // [u0, v0, u1, v1] for each line segment to draw.
 const OUTER_LINES = [

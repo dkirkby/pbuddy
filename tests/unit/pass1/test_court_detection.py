@@ -23,8 +23,8 @@ def _make_synthetic_court(w: int = 960, h: int = 540) -> np.ndarray:
     cv2.rectangle(img, (left, top), (right, bottom), color, thickness)
     # Net line and interior kitchen/center lines.
     cv2.line(img, (left, net_y), (right, net_y), color, thickness)
-    kitchen_top = top + (bottom - top) * 7 // 44
-    kitchen_bot = bottom - (bottom - top) * 7 // 44
+    kitchen_top = top + (bottom - top) * 15 // 44
+    kitchen_bot = top + (bottom - top) * 29 // 44
     mid_x = (left + right) // 2
     cv2.line(img, (left, kitchen_top), (right, kitchen_top), color, thickness)
     cv2.line(img, (left, kitchen_bot), (right, kitchen_bot), color, thickness)

@@ -140,10 +140,10 @@ def _fallback_geometry(w: int, h: int) -> CourtGeometry:
 _COURT_LINES_UV = [
     # Outer boundary
     (0, 0, 1, 0), (1, 0, 1, 1), (1, 1, 0, 1), (0, 1, 0, 0),
-    # Kitchen lines (7/44 from each baseline)
-    (0, 7/44, 1, 7/44), (0, 37/44, 1, 37/44),
+    # Kitchen lines (7ft from net; net at 22ft of 44ft court → v = 15/44 and 29/44)
+    (0, 15/44, 1, 15/44), (0, 29/44, 1, 29/44),
     # Center lines (from kitchen line to nearest baseline)
-    (0.5, 0, 0.5, 7/44), (0.5, 37/44, 0.5, 1),
+    (0.5, 0, 0.5, 15/44), (0.5, 29/44, 0.5, 1),
 ]
 _NET_UV = (0, 0.5, 1, 0.5)
 
