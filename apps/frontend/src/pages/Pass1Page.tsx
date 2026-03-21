@@ -50,7 +50,7 @@ export default function Pass1Page() {
   const bgArtifact = artifacts.find(
     (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background')
   )
-  // Load raw result JSON and init editor.
+  // Load raw result JSON.
   const { data: rawResult } = useQuery<Pass1RawResult>({
     queryKey: ['pass1-raw', projectId],
     queryFn: async () => {
@@ -60,11 +60,22 @@ export default function Pass1Page() {
     enabled: !!rawJsonArtifact,
   })
 
+  // Load saved corrections (may be null if none submitted yet).
+  const { data: corrResp } = useQuery({
+    queryKey: ['pass1-corrections', projectId],
+    queryFn: () => api.getPass1Corrections(projectId!),
+    enabled: !!rawJsonArtifact,
+  })
+
   useEffect(() => {
-    if (rawResult && !editor.courtGeometry) {
-      editor.initFromRaw(rawResult.stable_bounds, rawResult.court_geometry, rawResult.ball_color_model)
-    }
-  }, [rawResult])
+    if (!rawResult || editor.courtGeometry) return
+    const corr = corrResp?.data
+    editor.initFromRaw(
+      corr?.stable_bounds ?? rawResult.stable_bounds,
+      corr?.court_geometry ?? rawResult.court_geometry,
+      corr?.ball_color_model ?? rawResult.ball_color_model,
+    )
+  }, [rawResult, corrResp])
 
   async function handleSave() {
     if (!editor.stableBounds || !editor.courtGeometry || !editor.ballColorModel) return
@@ -216,7 +227,7 @@ export default function Pass1Page() {
         <div style={{ flex: '1 1 600px' }}>
           <h3 style={{ marginTop: 0 }}>Median Background</h3>
           <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
-            Drag the blue handles to adjust court corners; orange handles to adjust the net line.
+            Drag the blue handles to adjust the four court corners. Interior lines and net are computed automatically.
           </p>
           <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
             {bgUrl ? (

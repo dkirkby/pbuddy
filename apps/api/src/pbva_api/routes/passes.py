@@ -135,6 +135,21 @@ def list_pass_artifacts(project_id: str, pass_name: str, db: Session = Depends(g
     }
 
 
+@router.get("/{project_id}/passes/pass1/corrections")
+def get_pass1_corrections(
+    project_id: str,
+    db: Session = Depends(get_db),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass1")
+    if not pass_row.latest_correction_id:
+        return {"ok": True, "data": None}
+    corr_art = db.get(Artifact, pass_row.latest_correction_id)
+    if not corr_art or not Path(corr_art.path).exists():
+        return {"ok": True, "data": None}
+    import json
+    return {"ok": True, "data": json.loads(Path(corr_art.path).read_text())}
+
+
 @router.put("/{project_id}/passes/pass1/corrections")
 def submit_pass1_corrections(
     project_id: str,

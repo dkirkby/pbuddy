@@ -50,6 +50,11 @@ export const api = {
   getPass1Artifacts: (projectId: string) =>
     get<{ ok: boolean; data: ArtifactRef[] }>(`/api/projects/${projectId}/passes/pass1/artifacts`),
 
+  getPass1Corrections: (projectId: string) =>
+    get<{ ok: boolean; data: Pass1CorrectionPayload | null }>(
+      `/api/projects/${projectId}/passes/pass1/corrections`
+    ),
+
   submitPass1Corrections: (projectId: string, corrections: Pass1CorrectionPayload) =>
     put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass1/corrections`, corrections),
 
