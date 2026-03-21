@@ -10,7 +10,7 @@ The goal of this software package is to analyze video from a **single, mostly fi
 * **Key gameplay events** (hits, bounces, net contacts)
 * **Player positions and identities**
 
-The system must operate robustly in **messy, real-world environments**, optionally incorporating **audio cues and limited user input** to improve accuracy.
+The system must operate robustly in **messy, real-world environments**, optionally incorporating **limited user input** and (if viable) audio cues to improve accuracy.
 
 ---
 
@@ -29,314 +29,208 @@ The system must operate robustly in **messy, real-world environments**, optional
 * Doubles play (4 players on primary court)
 * Scenes with **multiple visible courts and players**
 * Per-point analysis (ball tracked only during live play)
-* Optional **audio-assisted event detection**
 * Optional **user-in-the-loop refinement**
+* **Conditional:** Audio-assisted event detection (only if proven effective with reasonable development effort)
 
 ### Excluded (initial version)
 
 * Multi-camera fusion
 * Fully automated, zero-intervention workflows
 * Spin estimation (future)
+* Nighttime/artificial lighting scenarios (to avoid severe motion blur)
+* Cloud-based video processing (initial version targets local compute)
 
 ---
 
 ## 4. Key Use Cases
 
 1. **Post-match review with cluttered background**
-
    * Identify and analyze the correct court despite adjacent play
 
 2. **Shot selection and placement analysis**
-
    * Evaluate shot intent relative to opponent positioning
 
 3. **Movement and positioning feedback**
-
    * Analyze spacing, kitchen positioning, and transitions
 
 4. **Early rally effectiveness**
-
    * Serve → return → 3rd → 4th shot outcomes
 
 5. **Error diagnosis**
-
    * Identify unforced errors (net, long, wide)
 
 6. **Interactive refinement workflow**
-
-   * User corrects court geometry, ball color, or mis-tracked events
+   * User corrects court geometry, ball color, serving state, or mis-tracked events
 
 ---
 
-## 5. Functional Requirements
+## 5. Architecture & Platform
 
-### 5.1 Video & Audio Ingestion
+* **Deployment:** Local application (desktop/laptop).
+* **Target Hardware:** Apple M-series Macs or Linux workstations equipped with discrete GPUs (e.g., NVIDIA RTX 3090).
+* **Rationale:** Completely bypasses the severe UX friction of uploading massive, high-framerate sports video files to the cloud. Maximizes performance and privacy.
 
-* Accept standard smartphone video (varied resolution, frame rate)
-* Extract synchronized audio track
+---
+
+## 6. Functional Requirements
+
+### 6.1 Video & Audio Ingestion
+
+* Accept standard smartphone video (varied resolution, frame rate).
+* Extract synchronized audio track (if audio processing is implemented).
 * Handle:
-
   * Slight camera motion (wind)
   * Initial and final camera repositioning
   * Partial court visibility
 
 ---
 
-### 5.2 Court Detection & Selection
+### 6.2 Court Detection & Selection
 
 * Detect multiple candidate courts in frame
 * Identify **primary court of interest**
 
 #### Methods:
-
 * Geometric detection of court lines
 * Spatial clustering of player activity
 * Optional user selection (click/select correct court)
 
 #### User-in-the-loop:
-
-* Allow user to:
-
-  * Confirm or select the correct court
-  * Adjust detected court boundaries
+* Allow user to confirm or select the correct court
+* Allow user to adjust detected court boundaries
 
 ---
 
-### 5.3 Camera Calibration & 3D Mapping
+### 6.3 Camera Calibration & 3D Mapping
 
-* Estimate camera parameters:
+* Estimate camera parameters (intrinsics + extrinsics).
+* Compute mapping: **2D image → 3D court coordinates**.
 
-  * Intrinsics + extrinsics
-* Compute mapping:
-
-  * **2D image → 3D court coordinates**
-
-#### Constraints:
-
-* Use known court dimensions
-* Use net height and position
-
-#### Enhancements:
-
-* Use **ball size as a scale constraint** for depth estimation
-* Refine calibration via trajectory consistency
+#### Constraints & Enhancements:
+* Use known court dimensions and net height/position.
+* Use **ball size as a scale constraint** for depth estimation.
+* **Shadow utilization:** Leverage the ball's shadow on the court surface (when visible in daytime lighting) as an auxiliary geometric constraint for 3D depth estimation.
+* Refine calibration via trajectory consistency.
 
 ---
 
-### 5.4 Ball Detection & Tracking
-
-#### Requirements:
+### 6.4 Ball Detection & Tracking
 
 * Detect and track ball in presence of:
-
   * Other balls (adjacent courts)
-  * Visual clutter
-  * Motion blur
-  * Variable lighting, e.g. due to nearby structures casting shadows and changing clouds
+  * Visual clutter and motion blur
+  * Daytime lighting variations (sunny or overcast)
 
 #### Disambiguation strategies:
-
-* Spatial filtering to primary court region
-* Temporal continuity constraints
-* Physics-based trajectory filtering
+* Spatial filtering to primary court region.
+* Temporal continuity constraints (ignoring rolling balls).
+* Physics-based trajectory filtering.
 
 #### Adaptive appearance modeling:
-
-* Learn ball color dynamically per video
-* Allow user to:
-
-  * Confirm or override detected ball color
+* Learn ball color dynamically per video.
+* Allow user to confirm or override detected ball color.
 
 ---
 
-### 5.5 3D Trajectory Reconstruction (Core)
+### 6.5 3D Trajectory Reconstruction (Core)
 
-* Reconstruct ball trajectory in 3D over time
-* Use:
-
+* Reconstruct ball trajectory in 3D over time using:
   * Camera calibration
   * Known ball size
-  * Physics-constrained motion while in flight, incorporating gravity, spin-dependent drag and lift
-  * Physics-constrained change of trajectory after hitting a paddle or the ground
-
-#### Robustness:
-
-* Handle occlusions via interpolation and physics constraints
+  * Physics-constrained motion while in flight, incorporating gravity, spin-dependent drag, and lift.
+  * Physics-constrained change of trajectory after hitting a paddle or the ground.
+* Handle occlusions via interpolation and physics constraints.
 
 ---
 
-### 5.6 Event Detection
+### 6.6 Event Detection
 
 #### Events:
-
 * Paddle hits
 * Ground bounces
-* Net contacts, where the ball might become dead, ending the point, or else change direction but continue over the net, continuing the point
+* Net contacts (dead ball vs. continuation)
 
-#### Multi-modal detection:
-
-* **Visual cues**:
-
-  * Trajectory discontinuities
-* **Audio cues**:
-
-  * Impact sounds (paddle/ground/net)
-
-#### Audio considerations:
-
-* Multiple simultaneous games may produce interfering sounds
-* Use:
-
-  * Temporal alignment with visual events
-  * Confidence scoring
+#### Detection Modalities:
+* **Visual cues:** Trajectory discontinuities.
+* **Audio cues (Conditional):** Impact sounds (paddle/ground/net). *Note: Only to be included if proven highly effective against multi-court background noise with reasonable effort.*
 
 #### Strategies:
-
-* Allow user to make corrections
+* Allow user to make quick corrections to missed or false events.
 
 ---
 
-### 5.7 Player Detection & Tracking
+### 6.7 Player Detection & Tracking
 
-* Detect and track 4 players on primary court
-* Maintain identity over time
-
-#### Challenges:
-
-* Nearby players on adjacent courts
-* Occlusions and crossings
+* Detect and track 4 players on primary court.
+* Maintain identity over time despite nearby players, occlusions, and crossings.
 
 #### Strategies:
-
-* Spatial restriction to selected court
-* Motion continuity
-* Team assignment via court side
-* Allow user to make corrections
+* Spatial restriction to selected court.
+* Motion continuity and team assignment via court side.
+* Allow user to make corrections.
 
 ---
 
-### 5.8 Hit Attribution
+### 6.8 Match State & Hit Attribution
 
-* Assign each hit to a specific player
+* Assign each hit to a specific player and maintain the state of the rally.
 
 #### Inputs:
+* Player positions & ball trajectory.
+* Audio timing (if implemented).
 
-* Player positions
-* Ball trajectory
-* Audio timing (optional)
-
-#### Requirements:
-
-* Resolve ambiguity in doubles play
-* Provide confidence score per attribution
-
-#### Strategies:
-
-* Track the score to know who is serving and receiving at the start of each point
+#### Scoring & Server Tracking:
+* Predict scoring by tracking **who serves at the start of each point**.
+* **User-in-the-loop:** The system will present its "best guess" of the serving team/player at the start of a rally. The user confirms or corrects this state to ensure accurate attribution for the rest of the point.
 
 ---
 
-### 5.9 Derived Analytics
+### 6.9 Derived Analytics
 
 #### 1. Player Movement
-
-* Position relative to:
-
-  * Kitchen line
-  * Baseline
-* Movement patterns across rally phases
-
----
+* Position relative to kitchen line and baseline.
+* Movement patterns across rally phases.
 
 #### 2. Shot Selection
-
-* Ball placement (3D landing position)
-* Shot direction relative to opponent positions
-* Ball speed at contact
-
----
+* Ball placement (3D landing position).
+* Shot direction relative to opponent positions.
+* Ball speed at contact.
 
 #### 3. Early Rally Outcomes
-
-* Analyze:
-
-  * Serve
-  * Return
-  * 3rd shot
-  * 4th shot
-
-For each:
-
-* Placement
-* Speed
-* Outcome classification
-
----
+* Analyze Serve, Return, 3rd shot, and 4th shot for placement, speed, and outcome classification.
 
 #### 4. Unforced Errors
-
-* Detect:
-
-  * Ball into net
-  * Ball out of bounds
-* Attribute error to player
+* Detect ball into net or out of bounds, and attribute error to player.
 
 ---
 
-### 5.10 User-in-the-Loop Refinement
+### 6.10 User-in-the-Loop Refinement
 
-The system must support **interactive correction workflows**:
-
-#### Editable elements:
-
-* Court geometry (drag corners/lines)
-* Ball color / detection parameters
-* Event corrections (add/remove hits, bounces)
-* Player identity corrections
-
-#### Design goal:
-
-> Minimal user effort → maximal improvement in analysis accuracy
+The system must support **interactive correction workflows**.
+* **Editable elements:** Court geometry, ball color, match state/server, event corrections, player identities.
+* **Design goal:** Minimal user effort → maximal improvement in analysis accuracy.
 
 ---
 
-### 5.11 Output Generation
+### 6.11 Output Generation
 
-#### Annotated Video
-
-* Overlay:
-
-  * 3D ball trajectory (projected)
-  * Bounce markers
-  * Hit markers
-  * Player positions
+* **Annotated Video:** Overlay 3D ball trajectory, bounce/hit markers, and player positions.
+* **Data Export:** JSON/CSV containing event timeline, ball trajectory (3D samples), player positions, and shot metrics.
 
 ---
 
-#### Data Export
+## 7. Non-Functional Requirements
 
-* JSON/CSV:
-
-  * Event timeline
-  * Ball trajectory (3D samples)
-  * Player positions
-  * Shot metrics
-
----
-
-## 6. Non-Functional Requirements
-
-### 6.1 Robustness
+### 7.1 Robustness
 
 * Must operate with:
-
-  * Multiple courts and balls visible
-  * Partial occlusions
-  * Variable lighting and color conditions
+  * Multiple courts and balls visible.
+  * Partial occlusions.
+  * Daytime lighting conditions (sunny or overcast).
 
 ---
 
-### 6.2 Accuracy Targets
+### 7.2 Accuracy Targets
 
 * Ball position error: ≤ 20–30 cm
 * Hit timing error: ≤ 1–2 frames
@@ -344,84 +238,70 @@ The system must support **interactive correction workflows**:
 
 ---
 
-### 6.3 Performance
+### 7.3 Performance
 
-* Offline processing:
-
-  * GPU: ≤ 1–5× real-time
-  * CPU: ≤ 5–20× real-time
-
----
-
-### 6.4 Usability
-
-* Interactive corrections must be:
-
-  * Fast (< a few seconds per adjustment)
-  * Visually intuitive
-* System should guide user when confidence is low
+* Target hardware (M-series Mac / 3090 GPU):
+  * GPU processing: ≤ 1–5× real-time
+  * CPU processing: ≤ 5–20× real-time
 
 ---
 
-## 7. Assumptions & Constraints
+### 7.4 Usability
 
-* Single camera, mostly fixed
-* Smartphone-quality video + audio
-* No markers on players or ball
-* Known:
-
-  * Court dimensions
-  * Approximate ball size
+* Interactive corrections must be fast (< a few seconds per adjustment) and visually intuitive.
+* System should guide user when confidence is low.
 
 ---
 
-## 8. Key Technical Challenges
+## 8. Assumptions & Constraints
+
+* Single camera, mostly fixed.
+* Smartphone-quality video.
+* Daytime play only (sufficient lighting for high shutter speeds).
+* No markers on players or ball.
+* Known court dimensions and approximate ball size.
+
+---
+
+## 9. Key Technical Challenges
 
 ### Primary
-
-**3D Ball Trajectory Reconstruction from Monocular Video in Multi-Court Scenes**
-
----
+* **3D Ball Trajectory Reconstruction from Monocular Video in Multi-Court Scenes**
 
 ### Secondary
-
-* Disambiguating target ball from others
-* Fusing audio + visual event detection
-* Robust court calibration with partial visibility
-* Player tracking with nearby distractors
+* Leveraging ball shadow for 2D-to-3D depth constraints.
+* Disambiguating target ball from others.
+* Robust court calibration with partial visibility.
+* Inferring match state with minimal human intervention.
 
 ---
 
-## 9. Success Metrics
+## 10. Success Metrics
 
 ### Quantitative
-
-* % of rallies successfully reconstructed
-* Ball tracking continuity (frames tracked / total)
-* Hit detection precision/recall
-* Correct player attribution rate
-
----
+* % of rallies successfully reconstructed.
+* Ball tracking continuity (frames tracked / total).
+* Hit detection precision/recall.
+* Correct player attribution rate.
 
 ### Qualitative
-
 * Does user trust the analysis?
 * Does minimal correction significantly improve results?
 * Are insights actionable for competitive players?
 
 ---
 
-## 10. Future Extensions
+## 11. Future Extensions
 
-* Shot classification (drive, dink, lob)
-* Spin estimation
-* Real-time feedback
-* Cross-match player comparison
-* AI coaching suggestions
+* Shot classification (drive, dink, lob).
+* Spin estimation.
+* Real-time feedback.
+* Cross-match player comparison.
+* AI coaching suggestions.
 
 ---
 
-## 11. Design Philosophy
+## 12. Design Philosophy
 
 * **Physics-informed + data-driven hybrid**
 * **Robust to real-world, multi-court environments**
