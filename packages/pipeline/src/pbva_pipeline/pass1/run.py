@@ -50,12 +50,20 @@ class Pass1:
         progress.update(0.15, "build_background_plate", "Sampling frames for median background…")
         progress.check_cancelled()
         bg_path = raw_dir / "median_background.png"
+
+        def _bg_progress(frac: float, msg: str) -> None:
+            progress.update(frac, "build_background_plate", msg)
+            progress.check_cancelled()
+
         median_bg = build_background_plate(
             video_path,
             bounds.in_time_s,
             bounds.out_time_s,
             target_samples=300,
             output_path=bg_path,
+            progress_callback=_bg_progress,
+            progress_start=0.15,
+            progress_end=0.55,
         )
         progress.update(0.55, "build_background_plate", f"Background saved to {bg_path.name}")
 

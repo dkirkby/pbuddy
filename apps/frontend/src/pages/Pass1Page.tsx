@@ -34,7 +34,6 @@ export default function Pass1Page() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const editor = useEditorStore()
-  const [showOverlay, setShowOverlay] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
@@ -51,10 +50,6 @@ export default function Pass1Page() {
   const bgArtifact = artifacts.find(
     (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background')
   )
-  const overlayArtifact = artifacts.find(
-    (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('court_overlay')
-  )
-
   // Load raw result JSON and init editor.
   const { data: rawResult } = useQuery<Pass1RawResult>({
     queryKey: ['pass1-raw', projectId],
@@ -107,8 +102,6 @@ export default function Pass1Page() {
   }
 
   const bgUrl = bgArtifact ? api.artifactUrl(bgArtifact.id) : null
-  const overlayUrl = overlayArtifact ? api.artifactUrl(overlayArtifact.id) : null
-  const displayUrl = showOverlay && overlayUrl ? overlayUrl : bgUrl
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -221,26 +214,13 @@ export default function Pass1Page() {
 
         {/* ── Right column: image ── */}
         <div style={{ flex: '1 1 600px' }}>
-          <h3 style={{ marginTop: 0 }}>
-            Median Background
-            {overlayUrl && (
-              <label style={{ fontSize: 12, fontWeight: 'normal', marginLeft: 16 }}>
-                <input
-                  type="checkbox"
-                  checked={showOverlay}
-                  onChange={(e) => setShowOverlay(e.target.checked)}
-                  style={{ marginRight: 4 }}
-                />
-                Show detection overlay
-              </label>
-            )}
-          </h3>
+          <h3 style={{ marginTop: 0 }}>Median Background</h3>
           <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
             Drag the blue handles to adjust court corners; orange handles to adjust the net line.
           </p>
           <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
-            {displayUrl ? (
-              <img src={displayUrl} alt="Median background" style={{ maxWidth: '100%', display: 'block' }} />
+            {bgUrl ? (
+              <img src={bgUrl} alt="Median background" style={{ maxWidth: '100%', display: 'block' }} />
             ) : (
               <div style={{
                 width: 600, height: 338, background: '#222',
@@ -249,7 +229,7 @@ export default function Pass1Page() {
                 {rawJsonArtifact ? 'Loading image…' : 'No artifacts yet — pass 1 may still be running.'}
               </div>
             )}
-            {displayUrl && !showOverlay && editor.courtGeometry && (
+            {bgUrl && editor.courtGeometry && (
               <CourtOverlay
                 geometry={editor.courtGeometry}
                 imageWidth={BG_W}

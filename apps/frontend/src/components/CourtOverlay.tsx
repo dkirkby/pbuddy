@@ -34,8 +34,8 @@ export function CourtOverlay({ geometry, imageWidth, imageHeight, onChange }: Pr
     const scaleX = imageWidth / rect.width
     const scaleY = imageHeight / rect.height
     return {
-      x: Math.max(0, Math.min(imageWidth, (clientX - rect.left) * scaleX)),
-      y: Math.max(0, Math.min(imageHeight, (clientY - rect.top) * scaleY)),
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
     }
   }
 
@@ -58,7 +58,7 @@ export function CourtOverlay({ geometry, imageWidth, imageHeight, onChange }: Pr
     <svg
       ref={svgRef}
       viewBox={`0 0 ${imageWidth} ${imageHeight}`}
-      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: dragging ? 'grabbing' : 'default' }}
+      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', cursor: dragging ? 'grabbing' : 'default' }}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onMouseLeave={onMouseUp}

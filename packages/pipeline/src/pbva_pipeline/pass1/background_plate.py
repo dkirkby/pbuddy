@@ -23,6 +23,9 @@ def build_background_plate(
     out_time_s: float,
     target_samples: int = 300,
     output_path: Path | None = None,
+    progress_callback=None,
+    progress_start: float = 0.0,
+    progress_end: float = 1.0,
 ) -> np.ndarray:
     """Return a (WORK_H, WORK_W, 3) uint8 median background image.
 
@@ -32,6 +35,9 @@ def build_background_plate(
         out_time_s: End of stable interval (seconds).
         target_samples: Number of frames to sample.
         output_path: If given, save the image as PNG to this path.
+        progress_callback: Optional callable(fraction, message) called every 10 frames.
+        progress_start: Fraction value at start of this stage (for scaling into overall progress).
+        progress_end: Fraction value at end of this stage.
     """
     import av  # type: ignore
 
@@ -48,7 +54,10 @@ def build_background_plate(
         stream = container.streams.video[0]
         time_base = float(stream.time_base)
 
-        for ts in sample_times:
+        for i, ts in enumerate(sample_times):
+            if progress_callback is not None and i % 10 == 0:
+                frac = progress_start + (progress_end - progress_start) * i / target_samples
+                progress_callback(frac, f"Sampling frame {i}/{target_samples}")
             # Seek to the nearest keyframe before ts.
             pts_target = int(ts / time_base)
             try:
