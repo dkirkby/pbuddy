@@ -1,0 +1,110 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Status
+
+This project is in the **planning phase** — documentation exists but no implementation code has been written yet. The three key documents to read before making any implementation decisions are:
+
+- `VISION.md` — requirements and accuracy targets
+- `PIPELINE.md` — the 4-pass processing pipeline with user correction workflows
+- `ARCHITECTURE.md` — detailed implementation blueprint (technology stack, data models, API design, module layout)
+
+## Planned Technology Stack
+
+**Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`)
+
+**Frontend:** React + TypeScript + Vite, with TanStack Query, Zustand, Canvas/SVG overlays
+
+**Persistence:** SQLite + SQLAlchemy 2.x
+
+**Pipeline libraries:** NumPy, SciPy, OpenCV, PyAV, ffmpeg, Pydantic; optional Torch/ONNXRuntime
+
+## Commands (once implemented)
+
+```bash
+# Install Python dependencies
+uv sync
+
+# Start the backend API server
+uv run uvicorn pbva_api.main:app --reload
+
+# Start the frontend dev server
+cd apps/frontend && npm run dev
+
+# Run backend tests
+uv run pytest
+
+# Run a single test
+uv run pytest tests/path/to/test_file.py::test_name
+```
+
+## Architecture Overview
+
+PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 4-pass sequential pipeline:
+
+```
+Browser (React UI)
+  ↕ HTTP REST + WebSocket
+FastAPI Backend  ←→  SQLite (metadata)
+  ↕
+Worker Process  ←→  Filesystem (artifacts)
+  ↕
+Pass 1 → Pass 2 → Pass 3 → Pass 4
+```
+
+Each pass follows the **accepted-state pattern**:
+1. Pass runs and writes **raw** artifacts
+2. User reviews and submits **corrections** via the UI
+3. User accepts; system merges raw + corrections into **accepted** artifacts
+4. Next pass depends **only** on accepted artifacts — never on raw outputs
+
+### The 4 Passes
+
+| Pass | Goal | Key outputs |
+|------|------|-------------|
+| 1 | Global scene & camera calibration | Median background plate, court geometry, ball color profile |
+| 2 | Temporal segmentation | "Live point" clips with dead time removed, initial match state |
+| 3 | Player & ball event tracking | 2D ball positions, player tracks, hit/bounce/net events |
+| 4 | 3D physics reconstruction | 3D trajectories, shot metrics, player analytics |
+
+### Project Artifact Layout
+
+```
+data/projects/<project_id>/
+├── uploads/original.mp4
+├── derived/            # normalized video, thumbnails, audio
+└── passes/
+    └── pass{1-4}/
+        ├── raw/        # system output
+        ├── corrections/ # user-submitted corrections
+        └── accepted/   # merged, used by downstream passes
+```
+
+### SQLite Schema (core tables)
+
+- `projects` — project metadata, video info
+- `passes` — per-project/pass state machine (pending → running → awaiting_review → accepted)
+- `jobs` — async job queue (queued → running → succeeded/failed)
+- `artifacts` — registry with roles: raw, correction, accepted
+- `events` — append-only log for WebSocket progress streaming
+
+### API Pattern
+
+REST for durable state; WebSocket (`/ws/projects/{id}`) for live progress. Core REST endpoints:
+
+```
+POST   /api/projects
+POST   /api/projects/{id}/video
+POST   /api/projects/{id}/passes/{pass}/run
+PUT    /api/projects/{id}/passes/{pass}/corrections
+POST   /api/projects/{id}/passes/{pass}/accept
+```
+
+## Key Design Principles
+
+1. **Local-first** — all video, artifacts, and metadata stay on the user's machine
+2. **Pass-oriented** — each pass is independently runnable, inspectable, and retryable
+3. **Human-in-the-loop is first-class** — corrections are stored explicitly, not patched in memory
+4. **Durable state** — app restarts must be recoverable; long-running compute never depends solely on in-memory state
+5. **Simple deployment** — two processes (API server + worker); avoid Redis/Celery unless proven necessary

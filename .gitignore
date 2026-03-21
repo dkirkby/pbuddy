@@ -1,2 +1,13 @@
 *.mp4
 .claude
+.env
+data/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+node_modules/
+apps/frontend/dist/
+.DS_Store
