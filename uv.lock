@@ -581,6 +581,10 @@ wheels = [
 name = "pbuddy"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "pbva-api" },
+    { name = "pbva-worker" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -592,6 +596,10 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "pbva-api", editable = "apps/api" },
+    { name = "pbva-worker", editable = "apps/worker" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -605,7 +613,7 @@ dev = [
 [[package]]
 name = "pbva-api"
 version = "0.1.0"
-source = { virtual = "apps/api" }
+source = { editable = "apps/api" }
 dependencies = [
     { name = "fastapi" },
     { name = "orjson" },
@@ -687,7 +695,7 @@ requires-dist = [
 [[package]]
 name = "pbva-worker"
 version = "0.1.0"
-source = { virtual = "apps/worker" }
+source = { editable = "apps/worker" }
 dependencies = [
     { name = "orjson" },
     { name = "pbva-core" },

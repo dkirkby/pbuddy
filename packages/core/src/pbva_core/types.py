@@ -99,8 +99,10 @@ class CourtGeometry(BaseModel):
     top_right: CourtCorner
     bottom_left: CourtCorner
     bottom_right: CourtCorner
-    net_left: CourtCorner
-    net_right: CourtCorner
+    # Deprecated: net endpoints are now derived from the 4 corners via court proportions.
+    # Kept optional for backward compatibility with stored data.
+    net_left: CourtCorner | None = None
+    net_right: CourtCorner | None = None
 
 
 class BallColorModel(BaseModel):

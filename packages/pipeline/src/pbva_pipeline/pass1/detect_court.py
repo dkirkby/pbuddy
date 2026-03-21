@@ -112,21 +112,11 @@ def detect_court(
         geometry = _fallback_geometry(w, h)
         return geometry, 0.2
 
-    # Estimate net line: pick a horizontal line near vertical midpoint of court.
-    mid_rho = (top_h[0] + bot_h[0]) / 2
-    net_h = min(h_clusters, key=lambda l: abs(l[0] - mid_rho)) if len(h_clusters) >= 3 else \
-        ((mid_rho, np.pi / 2))
-
-    net_left = _line_intersection(net_h, left_v) or ((tl[0] + bl[0]) / 2, (tl[1] + bl[1]) / 2)
-    net_right = _line_intersection(net_h, right_v) or ((tr[0] + br[0]) / 2, (tr[1] + br[1]) / 2)
-
     geometry = CourtGeometry(
         top_left=CourtCorner(x=round(tl[0], 1), y=round(tl[1], 1)),
         top_right=CourtCorner(x=round(tr[0], 1), y=round(tr[1], 1)),
         bottom_left=CourtCorner(x=round(bl[0], 1), y=round(bl[1], 1)),
         bottom_right=CourtCorner(x=round(br[0], 1), y=round(br[1], 1)),
-        net_left=CourtCorner(x=round(net_left[0], 1), y=round(net_left[1], 1)),
-        net_right=CourtCorner(x=round(net_right[0], 1), y=round(net_right[1], 1)),
     )
 
     # Optionally write debug overlay.
@@ -144,30 +134,40 @@ def _fallback_geometry(w: int, h: int) -> CourtGeometry:
         top_right=CourtCorner(x=w - margin_x, y=margin_y),
         bottom_left=CourtCorner(x=margin_x, y=h - margin_y),
         bottom_right=CourtCorner(x=w - margin_x, y=h - margin_y),
-        net_left=CourtCorner(x=margin_x, y=h / 2),
-        net_right=CourtCorner(x=w - margin_x, y=h / 2),
     )
+
+
+_COURT_LINES_UV = [
+    # Outer boundary
+    (0, 0, 1, 0), (1, 0, 1, 1), (1, 1, 0, 1), (0, 1, 0, 0),
+    # Kitchen lines (7/44 from each baseline)
+    (0, 7/44, 1, 7/44), (0, 37/44, 1, 37/44),
+    # Center lines (from kitchen line to nearest baseline)
+    (0.5, 0, 0.5, 7/44), (0.5, 37/44, 0.5, 1),
+]
+_NET_UV = (0, 0.5, 1, 0.5)
+
+
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def _court_to_image(geo: CourtGeometry, u: float, v: float) -> tuple[int, int]:
+    """Bilinear interpolation from normalized court (u,v) to image pixel coords."""
+    tl, tr = geo.top_left, geo.top_right
+    bl, br = geo.bottom_left, geo.bottom_right
+    x = _lerp(_lerp(tl.x, tr.x, u), _lerp(bl.x, br.x, u), v)
+    y = _lerp(_lerp(tl.y, tr.y, u), _lerp(bl.y, br.y, u), v)
+    return int(x), int(y)
 
 
 def _write_overlay(img: np.ndarray, geo: CourtGeometry, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    corners = [
-        (int(geo.top_left.x), int(geo.top_left.y)),
-        (int(geo.top_right.x), int(geo.top_right.y)),
-        (int(geo.bottom_right.x), int(geo.bottom_right.y)),
-        (int(geo.bottom_left.x), int(geo.bottom_left.y)),
-    ]
-    # Draw court rectangle.
-    for i in range(4):
-        cv2.line(img, corners[i], corners[(i + 1) % 4], (0, 255, 0), 2)
-    # Draw net line.
-    cv2.line(
-        img,
-        (int(geo.net_left.x), int(geo.net_left.y)),
-        (int(geo.net_right.x), int(geo.net_right.y)),
-        (0, 165, 255), 2,
-    )
-    # Draw corner handles.
-    for pt in corners:
-        cv2.circle(img, pt, 6, (255, 0, 0), -1)
+    for u0, v0, u1, v1 in _COURT_LINES_UV:
+        cv2.line(img, _court_to_image(geo, u0, v0), _court_to_image(geo, u1, v1), (68, 170, 255), 2)
+    u0, v0, u1, v1 = _NET_UV
+    cv2.line(img, _court_to_image(geo, u0, v0), _court_to_image(geo, u1, v1), (0, 165, 255), 2)
+    for key in ('top_left', 'top_right', 'bottom_left', 'bottom_right'):
+        c = getattr(geo, key)
+        cv2.circle(img, (int(c.x), int(c.y)), 6, (255, 100, 68), -1)
     cv2.imwrite(str(path), img)

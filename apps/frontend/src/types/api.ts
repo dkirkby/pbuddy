@@ -53,8 +53,6 @@ export interface CourtGeometry {
   top_right: CourtCorner
   bottom_left: CourtCorner
   bottom_right: CourtCorner
-  net_left: CourtCorner
-  net_right: CourtCorner
 }
 
 export interface BallColorModel {

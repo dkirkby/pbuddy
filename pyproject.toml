@@ -2,7 +2,10 @@
 name = "pbuddy"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pbva-api",
+    "pbva-worker",
+]
 
 [tool.uv.workspace]
 members = [
@@ -17,6 +20,8 @@ members = [
 pbva-core = { workspace = true }
 pbva-db = { workspace = true }
 pbva-pipeline = { workspace = true }
+pbva-api = { workspace = true }
+pbva-worker = { workspace = true }
 
 [dependency-groups]
 dev = [
