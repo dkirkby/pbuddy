@@ -24,6 +24,12 @@ from pbva_api.dependencies import get_db, get_settings
 
 router = APIRouter(prefix="/api/projects", tags=["passes"])
 
+# Project status to set when a pass is re-queued (before the new run completes).
+_RUN_RESETS_STATUS: dict[str, ProjectStatus] = {
+    "pass1": ProjectStatus.pass1_ready,
+    "pass2": ProjectStatus.pass1_accepted,
+}
+
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -91,8 +97,10 @@ def run_pass(
     pass_row.updated_at = _utcnow()
 
     # Reset project status so the UI reflects that the pass is re-running.
-    project.status = ProjectStatus.pass1_ready.value
-    project.updated_at = _utcnow()
+    reset_status = _RUN_RESETS_STATUS.get(pass_name)
+    if reset_status is not None:
+        project.status = reset_status.value
+        project.updated_at = _utcnow()
 
     db.commit()
 
@@ -304,3 +312,71 @@ def accept_pass1(
     db.commit()
 
     return {"ok": True, "data": accepted.model_dump(mode="json")}
+
+
+@router.post("/{project_id}/passes/pass2/accept")
+def accept_pass2(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    import shutil
+
+    pass_row = _get_pass_or_404(db, project_id, "pass2")
+    if pass_row.state != PassState.waiting_for_user.value:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass 2 is in state '{pass_row.state}', cannot accept",
+        )
+
+    from pbva_core import paths as p
+
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass2")
+    accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass2")
+    accepted_dir.mkdir(parents=True, exist_ok=True)
+
+    for filename in ("result.json", "detections.json"):
+        src = raw_dir / filename
+        if not src.exists():
+            raise HTTPException(status_code=500, detail=f"Raw {filename} not found")
+        shutil.copy2(src, accepted_dir / filename)
+
+    # Register accepted result.json artifact.
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass2",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="json",
+        path=str(accepted_dir / "result.json"),
+    ))
+
+    # Register accepted detections.json artifact.
+    dets_art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=dets_art_id,
+        project_id=project_id,
+        pass_name="pass2",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="json",
+        path=str(accepted_dir / "detections.json"),
+    ))
+
+    pass_row.state = PassState.accepted.value
+    pass_row.latest_accepted_artifact_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    project = db.get(Project, project_id)
+    project.status = ProjectStatus.pass2_accepted.value
+    project.updated_at = _utcnow()
+
+    from pbva_db.models import Event
+    db.add(Event(
+        project_id=project_id,
+        event_type="pass_accepted",
+        payload_json=json.dumps({"pass_name": "pass2"}),
+    ))
+    db.commit()
+
+    return {"ok": True}

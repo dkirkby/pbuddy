@@ -1,5 +1,6 @@
 import type {
   ArtifactRef,
+  DetectionsData,
   JobSummary,
   Pass1CorrectionPayload,
   ProjectDetail,
@@ -65,6 +66,23 @@ export const api = {
 
   acceptPass1: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass1/accept`),
+
+  runPass2: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass2/run`),
+
+  getPass2Artifacts: (projectId: string) =>
+    get<{ ok: boolean; data: ArtifactRef[] }>(`/api/projects/${projectId}/passes/pass2/artifacts`),
+
+  getDetections: async (artifactId: string): Promise<DetectionsData> => {
+    const res = await fetch(`/api/artifacts/${artifactId}`)
+    if (!res.ok) throw new Error(`Failed to fetch detections: ${res.status}`)
+    return res.json()
+  },
+
+  acceptPass2: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),
+
+  videoUrl: (projectId: string) => `/api/projects/${projectId}/video`,
 
   artifactUrl: (artifactId: string) => `/api/artifacts/${artifactId}`,
 }

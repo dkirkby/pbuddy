@@ -67,7 +67,7 @@ export default function Pass1Page() {
   useEffect(() => {
     if (!rawResult || corrResp === undefined) return
     editor.initFromRaw(
-      corrResp.data?.stable_bounds ?? rawResult.stable_bounds,
+      rawResult.stable_bounds,
       corrResp.data?.court_geometry ?? defaultCourt(rawResult.bg_width, rawResult.bg_height),
     )
   }, [rawResult, corrResp])

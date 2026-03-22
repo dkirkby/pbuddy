@@ -122,3 +122,34 @@ class Pass1AcceptedOutput(BaseModel):
     median_background_artifact_id: str
     bg_width: int
     bg_height: int
+
+
+# ---------------------------------------------------------------------------
+# Pass 2 domain types
+# ---------------------------------------------------------------------------
+
+
+class Pass2RawResult(BaseModel):
+    frame_count: int
+    detection_count: int
+    fps: float
+    bg_width: int
+    bg_height: int
+    threshold: int
+    min_area: int
+    max_area: int
+
+
+class Pass2CorrectionPayload(BaseModel):
+    pass  # No corrections in Milestone 2
+
+
+class Pass2AcceptedOutput(BaseModel):
+    frame_count: int
+    detection_count: int
+    fps: float
+    bg_width: int
+    bg_height: int
+    threshold: int
+    min_area: int
+    max_area: int

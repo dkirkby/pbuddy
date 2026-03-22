@@ -58,9 +58,15 @@ export default function ProjectHome() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
   })
 
+  const runPass2 = useMutation({
+    mutationFn: () => api.runPass2(projectId!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+  })
+
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
+  const pass2 = project.passes.find((p) => p.pass_name === 'pass2')
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -134,20 +140,85 @@ export default function ProjectHome() {
         </div>
       </div>
 
-      {/* Passes 2–4: locked until pass1 accepted */}
-      {(['pass2', 'pass3', 'pass4'] as const).map((pn, i) => (
+      {/* Pass 2 card */}
+      <div style={{
+        border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
+        opacity: pass1?.state === 'accepted' ? 1 : 0.4,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>Pass 2 — Moving Object Detection</h2>
+          <span style={{ color: STATE_COLOR[pass2?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
+            {STATE_LABELS[pass2?.state ?? 'not_started']}
+          </span>
+        </div>
+        <p style={{ color: '#555', fontSize: 14 }}>
+          Detects foreground blobs in every frame via background subtraction.
+        </p>
+
+        {progress && (pass2?.state === 'running' || pass2?.state === 'queued') && (
+          <div style={{ margin: '8px 0' }}>
+            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
+              <div style={{
+                width: `${Math.round(progress.fraction * 100)}%`,
+                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
+              }} />
+            </div>
+            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
+              {progress.stage} — {Math.round(progress.fraction * 100)}%
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          {pass1?.state === 'accepted' && (pass2?.state === 'not_started' || pass2?.state === 'failed') && (
+            <button
+              onClick={() => runPass2.mutate()}
+              disabled={runPass2.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer' }}
+            >
+              {runPass2.isPending ? 'Queuing…' : 'Run Pass 2'}
+            </button>
+          )}
+          {pass2?.state === 'waiting_for_user' && (
+            <button
+              onClick={() => navigate(`/projects/${projectId}/pass2`)}
+              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
+            >
+              Review →
+            </button>
+          )}
+          {pass2?.state === 'accepted' && (
+            <span style={{ color: '#090' }}>✓ Accepted</span>
+          )}
+          {(pass2?.state === 'waiting_for_user' || pass2?.state === 'accepted') && pass1?.state === 'accepted' && (
+            <button
+              onClick={() => runPass2.mutate()}
+              disabled={runPass2.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+            >
+              {runPass2.isPending ? 'Queuing…' : 'Re-run'}
+            </button>
+          )}
+          {pass1?.state !== 'accepted' && (
+            <span style={{ color: '#aaa', fontSize: 14 }}>Complete Pass 1 first.</span>
+          )}
+        </div>
+      </div>
+
+      {/* Passes 3–4: locked until pass2 accepted */}
+      {(['pass3', 'pass4'] as const).map((pn, i) => (
         <div
           key={pn}
           style={{
             border: '1px solid #eee', borderRadius: 8, padding: 16, marginBottom: 16,
-            opacity: pass1?.state === 'accepted' ? 1 : 0.4,
+            opacity: pass2?.state === 'accepted' ? 1 : 0.4,
           }}
         >
           <h2 style={{ margin: 0 }}>
-            Pass {i + 2} — {['Temporal Segmentation', 'Player & Ball Tracking', '3D Reconstruction'][i]}
+            Pass {i + 3} — {['Player & Ball Tracking', '3D Reconstruction'][i]}
           </h2>
           <p style={{ color: '#888', fontSize: 14, margin: '8px 0 0' }}>
-            {pass1?.state !== 'accepted' ? 'Complete Pass 1 first.' : 'Not yet implemented.'}
+            {pass2?.state !== 'accepted' ? 'Complete Pass 2 first.' : 'Not yet implemented.'}
           </p>
         </div>
       ))}

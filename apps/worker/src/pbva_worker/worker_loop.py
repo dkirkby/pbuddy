@@ -31,9 +31,18 @@ def _get_pass(pass_name: str):
         if pass_name == "pass1":
             from pbva_pipeline.pass1.run import Pass1
             _PASS_REGISTRY["pass1"] = Pass1()
+        elif pass_name == "pass2":
+            from pbva_pipeline.pass2.run import Pass2
+            _PASS_REGISTRY["pass2"] = Pass2()
         else:
             raise ValueError(f"Unknown pass: {pass_name}")
     return _PASS_REGISTRY[pass_name]
+
+
+_PASS_WAITING_STATUS = {
+    "pass1": ProjectStatus.pass1_waiting_for_review,
+    "pass2": ProjectStatus.pass2_waiting_for_review,
+}
 
 
 def _utcnow():
@@ -99,11 +108,12 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
     with session_factory() as session:
         art_ids = _register_artifacts(session, job.project_id, job.pass_name, job.id, artifact_dicts)
 
-        # Find the median background artifact ID for Pass 1.
+        # Find the median background artifact ID (Pass 1 only).
         median_bg_artifact_id = ""
-        for i, art in enumerate(artifact_dicts):
-            if art["type"] == "png" and "median_background" in art["path"]:
-                median_bg_artifact_id = art_ids[i]
+        if job.pass_name == "pass1":
+            for i, art in enumerate(artifact_dicts):
+                if art["type"] == "png" and "median_background" in art["path"]:
+                    median_bg_artifact_id = art_ids[i]
 
         # Update pass state.
         pass_row = session.execute(
@@ -118,8 +128,10 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
 
         # Update project status.
         project = session.get(Project, job.project_id)
-        project.status = ProjectStatus.pass1_waiting_for_review.value
-        project.updated_at = _utcnow()
+        waiting_status = _PASS_WAITING_STATUS.get(job.pass_name)
+        if waiting_status is not None:
+            project.status = waiting_status.value
+            project.updated_at = _utcnow()
 
         # Mark job succeeded.
         job_row = session.get(Job, job.id)

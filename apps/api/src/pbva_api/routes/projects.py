@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from pbva_core.config import Settings
@@ -178,6 +179,26 @@ def delete_project(
     db.commit()
     if root.exists():
         shutil.rmtree(root, ignore_errors=True)
+
+
+@router.get("/{project_id}/video")
+def serve_project_video(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    video_path = Path(project.video_path) if project.video_path else None
+    if not video_path or not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    # Guard against directory traversal.
+    try:
+        video_path.resolve().relative_to(settings.data_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return FileResponse(str(video_path), media_type="video/mp4")
 
 
 @router.get("/{project_id}/video/metadata")
