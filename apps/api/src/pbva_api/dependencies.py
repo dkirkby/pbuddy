@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
-
 from fastapi import Depends
 from sqlalchemy.orm import Session, sessionmaker
 
