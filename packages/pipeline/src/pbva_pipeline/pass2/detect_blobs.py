@@ -11,7 +11,7 @@ import numpy as np
 
 # Default parameters.
 DEFAULT_THRESHOLD = 30
-DEFAULT_MIN_AREA = 300        # px² at 1080p
+DEFAULT_MIN_AREA = 50         # px² — small enough to catch a ~8px-radius ball at 1080p
 DEFAULT_MAX_AREA = 160_000    # px²
 
 _OPEN_KERNEL_SIZE = 3         # morphological open kernel
@@ -64,9 +64,16 @@ def _process_frame(
         contours, _ = cv2.findContours(blob_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
         if contours and len(contours[0]) >= 5:
-            (cx, cy), (minor_ax, major_ax), angle = cv2.fitEllipse(contours[0])
-            a = major_ax / 2.0
-            b = minor_ax / 2.0
+            (cx, cy), (ax1_full, ax2_full), angle = cv2.fitEllipse(contours[0])
+            # ax1_full is along the 'angle' direction; ax2_full is perpendicular.
+            # Normalise so that a (semi-major) ≥ b (semi-minor), adjusting angle if needed.
+            ax1_half = ax1_full / 2.0
+            ax2_half = ax2_full / 2.0
+            if ax1_half >= ax2_half:
+                a, b = ax1_half, ax2_half
+            else:
+                a, b = ax2_half, ax1_half
+                angle = (angle + 90.0) % 180.0
         else:
             r = math.sqrt(area / math.pi)
             cx = bx + bw / 2.0
