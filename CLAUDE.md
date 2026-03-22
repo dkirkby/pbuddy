@@ -10,6 +10,14 @@ Milestone 1 (Pass 1 end-to-end: upload → run → review → accept) is impleme
 - `PIPELINE.md` — the 4-pass processing pipeline with user correction workflows
 - `ARCHITECTURE.md` — detailed implementation blueprint
 
+## Sport Dimensions
+
+All court geometry and ball physical properties are defined in **`dimensions.json`** at the repo root. This is the single authoritative source — do not hardcode pickleball dimensions anywhere in the codebase. Key values (metric):
+
+- Court: 13.41 m long × 6.10 m wide; non-volley zone 2.13 m from net
+- Net: 0.91 m at posts, 0.86 m at centre; post-to-post width 6.71 m
+- Ball diameter: 73–75 mm; weight: 22.1–26.5 g
+
 ## Technology Stack
 
 **Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`); monorepo workspace packages: `pbva-core`, `pbva-db`, `pbva-pipeline`, `pbva-api`, `pbva-worker`

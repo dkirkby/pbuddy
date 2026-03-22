@@ -1,0 +1,35 @@
+{
+  "sport": "Pickleball",
+  "units": "metric",
+  "court_dimensions": {
+    "total_length": 13.41,
+    "total_width": 6.10,
+    "sideline_length": 13.41,
+    "baseline_width": 6.10,
+    "non_volley_zone_depth": 2.13,
+    "service_area_length": 4.57,
+    "service_area_width": 3.05,
+    "line_thickness": 0.05
+  },
+  "net_specifications": {
+    "post_height": 0.91,
+    "center_height_dip": 0.86,
+    "post_to_post_width": 6.71
+  },
+  "ball_specifications": {
+    "diameter_range": {
+      "min": 73,
+      "max": 75,
+      "unit": "millimeters"
+    },
+    "weight_range": {
+      "min": 22.1,
+      "max": 26.5,
+      "unit": "grams"
+    }
+  },
+  "sources": [
+    "https://usapickleball.org/what-is-pickleball/official-rules/",
+    "https://ifpickleball.org/rules-summary/"
+  ]
+}
