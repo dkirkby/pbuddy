@@ -17,9 +17,10 @@ import numpy as np
 
 from pbva_core.types import StableBounds
 
-# Output resolution for the median background image.
-WORK_W = 960
-WORK_H = 540
+# Maximum output resolution for the median background image.
+# Native resolution is used up to this cap (aspect ratio preserved).
+MAX_WORK_W = 1920
+MAX_WORK_H = 1080
 
 # Consecutive stable/unstable samples required for state transitions.
 _STABLE_RUN  = 3
@@ -41,6 +42,8 @@ def scan_video(
     progress_callback=None,
     progress_start: float = 0.0,
     progress_end: float = 1.0,
+    max_width: int = MAX_WORK_W,
+    max_height: int = MAX_WORK_H,
 ) -> tuple[StableBounds, np.ndarray]:
     """Detect stable video bounds and build a median background in one video pass.
 
@@ -51,6 +54,10 @@ def scan_video(
     import av  # type: ignore
 
     rng = random.Random(42)  # deterministic reservoir sampling
+
+    # Working resolution is determined after opening the stream (see below).
+    work_w: int = 0
+    work_h: int = 0
 
     diff_buffer: deque = deque(maxlen=smoothing_window)
     prev_small: np.ndarray | None = None
@@ -73,6 +80,16 @@ def scan_video(
     with av.open(str(video_path)) as container:
         stream = container.streams.video[0]
         stream.codec_context.skip_frame = 'DEFAULT'
+
+        # Compute working resolution: native up to max, preserving aspect ratio.
+        native_w = stream.width or max_width
+        native_h = stream.height or max_height
+        if native_w <= max_width and native_h <= max_height:
+            work_w, work_h = native_w, native_h
+        else:
+            scale = min(max_width / native_w, max_height / native_h)
+            work_w = round(native_w * scale)
+            work_h = round(native_h * scale)
 
         for packet in container.demux(stream):
             for frame in packet.decode():
@@ -118,7 +135,7 @@ def scan_video(
                             last_stable_ts = ts
                             # Accumulate BGR frame via reservoir sampling.
                             bgr = frame.to_ndarray(format='bgr24')
-                            resized = cv2.resize(bgr, (WORK_W, WORK_H), interpolation=cv2.INTER_AREA)
+                            resized = cv2.resize(bgr, (work_w, work_h), interpolation=cv2.INTER_AREA)
                             n_stable_seen += 1
                             if len(bg_frames) < target_samples:
                                 bg_frames.append(resized)

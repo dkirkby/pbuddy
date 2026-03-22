@@ -6,17 +6,13 @@ import { CourtOverlay } from '../components/CourtOverlay'
 import { useEditorStore } from '../state/editorStore'
 import type { ArtifactRef, CourtGeometry, Pass1RawResult } from '../types/api'
 
-// Working resolution of median background image.
-const BG_W = 960
-const BG_H = 540
-
-// Default court corners (normalized screen coords → pixel coords).
-// Matches the initial overlay shown before the user refines by dragging.
-const DEFAULT_COURT: CourtGeometry = {
-  top_left:     { x: 0.35 * BG_W, y: 0.30 * BG_H },
-  top_right:    { x: 0.65 * BG_W, y: 0.30 * BG_H },
-  bottom_left:  { x: 0.05 * BG_W, y: 0.90 * BG_H },
-  bottom_right: { x: 0.95 * BG_W, y: 0.90 * BG_H },
+function defaultCourt(bgW: number, bgH: number): CourtGeometry {
+  return {
+    top_left:     { x: 0.35 * bgW, y: 0.30 * bgH },
+    top_right:    { x: 0.65 * bgW, y: 0.30 * bgH },
+    bottom_left:  { x: 0.05 * bgW, y: 0.90 * bgH },
+    bottom_right: { x: 0.95 * bgW, y: 0.90 * bgH },
+  }
 }
 
 function fmtTime(s: number): string {
@@ -72,7 +68,7 @@ export default function Pass1Page() {
     if (!rawResult || corrResp === undefined) return
     editor.initFromRaw(
       corrResp.data?.stable_bounds ?? rawResult.stable_bounds,
-      corrResp.data?.court_geometry ?? DEFAULT_COURT,
+      corrResp.data?.court_geometry ?? defaultCourt(rawResult.bg_width, rawResult.bg_height),
     )
   }, [rawResult, corrResp])
 
@@ -173,11 +169,11 @@ export default function Pass1Page() {
                 {rawJsonArtifact ? 'Loading image…' : 'No artifacts yet — pass 1 may still be running.'}
               </div>
             )}
-            {bgUrl && editor.courtGeometry && (
+            {bgUrl && editor.courtGeometry && rawResult && (
               <CourtOverlay
                 geometry={editor.courtGeometry}
-                imageWidth={BG_W}
-                imageHeight={BG_H}
+                imageWidth={rawResult.bg_width}
+                imageHeight={rawResult.bg_height}
                 onChange={editor.setCourtGeometry}
               />
             )}

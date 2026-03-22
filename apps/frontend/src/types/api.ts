@@ -63,6 +63,8 @@ export interface StableBounds {
 export interface Pass1RawResult {
   stable_bounds: StableBounds
   median_background_path: string
+  bg_width: number
+  bg_height: number
 }
 
 export interface Pass1CorrectionPayload {

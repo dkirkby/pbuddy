@@ -15,17 +15,14 @@ from pbva_pipeline.base import PassContext
 
 from .scan import scan_video
 
-# Background plate working resolution — must match BG_W/BG_H in the frontend.
-_BG_W, _BG_H = 960, 540
-
-# Default court corners as normalized screen coordinates, converted to pixel coords.
-# These match the initial overlay shown in the Pass 1 review UI.
-_DEFAULT_COURT = CourtGeometry(
-    top_left=CourtCorner(x=0.35 * _BG_W, y=0.30 * _BG_H),
-    top_right=CourtCorner(x=0.65 * _BG_W, y=0.30 * _BG_H),
-    bottom_left=CourtCorner(x=0.05 * _BG_W, y=0.90 * _BG_H),
-    bottom_right=CourtCorner(x=0.95 * _BG_W, y=0.90 * _BG_H),
-)
+def _default_court(bg_w: int, bg_h: int) -> CourtGeometry:
+    """Return default court corners at normalized positions in the background image."""
+    return CourtGeometry(
+        top_left=CourtCorner(x=0.35 * bg_w, y=0.30 * bg_h),
+        top_right=CourtCorner(x=0.65 * bg_w, y=0.30 * bg_h),
+        bottom_left=CourtCorner(x=0.05 * bg_w, y=0.90 * bg_h),
+        bottom_right=CourtCorner(x=0.95 * bg_w, y=0.90 * bg_h),
+    )
 
 
 class Pass1:
@@ -51,7 +48,7 @@ class Pass1:
             progress.update(frac, "scan_video", msg)
             progress.check_cancelled()
 
-        bounds, _ = scan_video(
+        bounds, median_bg = scan_video(
             ctx.video_path,
             ctx.video_duration_s,
             target_samples=300,
@@ -65,9 +62,12 @@ class Pass1:
 
         # --- Write raw result JSON ---
         progress.update(0.95, "write_outputs", "Writing raw result…")
+        bg_h, bg_w = median_bg.shape[:2]
         result = Pass1RawResult(
             stable_bounds=bounds,
             median_background_path=str(bg_path.relative_to(ctx.paths.project_root)),
+            bg_width=bg_w,
+            bg_height=bg_h,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
         progress.update(1.0, "write_outputs", "Pass 1 complete")
@@ -94,12 +94,14 @@ class Pass1:
     ) -> Pass1AcceptedOutput:
         bounds = raw_result.stable_bounds
         court_geo = (corrections.court_geometry if corrections and corrections.court_geometry
-                     else _DEFAULT_COURT)
+                     else _default_court(raw_result.bg_width, raw_result.bg_height))
 
         accepted = Pass1AcceptedOutput(
             stable_bounds=bounds,
             court_geometry=court_geo,
             median_background_artifact_id=median_bg_artifact_id,
+            bg_width=raw_result.bg_width,
+            bg_height=raw_result.bg_height,
         )
 
         accepted_dir = ctx.paths.pass_accepted_dir

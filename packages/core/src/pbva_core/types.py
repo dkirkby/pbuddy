@@ -108,6 +108,8 @@ class CourtGeometry(BaseModel):
 class Pass1RawResult(BaseModel):
     stable_bounds: StableBounds
     median_background_path: str   # relative to project root
+    bg_width: int                 # actual pixel width of median_background.png
+    bg_height: int                # actual pixel height of median_background.png
 
 
 class Pass1CorrectionPayload(BaseModel):
@@ -118,3 +120,5 @@ class Pass1AcceptedOutput(BaseModel):
     stable_bounds: StableBounds
     court_geometry: CourtGeometry
     median_background_artifact_id: str
+    bg_width: int
+    bg_height: int
