@@ -94,6 +94,7 @@ export default function ProjectListPage() {
             <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
               {p.video_duration_s ? `${Math.round(p.video_duration_s / 60)} min` : 'no video'}
               {p.video_width ? ` · ${p.video_width}×${p.video_height}` : ''}
+              {p.video_fps ? ` · ${Math.round(p.video_fps)} fps` : ''}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

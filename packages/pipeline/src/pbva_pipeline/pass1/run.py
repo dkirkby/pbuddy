@@ -92,8 +92,7 @@ class Pass1:
         corrections: Pass1CorrectionPayload | None,
         median_bg_artifact_id: str = "",
     ) -> Pass1AcceptedOutput:
-        bounds = (corrections.stable_bounds if corrections and corrections.stable_bounds
-                  else raw_result.stable_bounds)
+        bounds = raw_result.stable_bounds
         court_geo = (corrections.court_geometry if corrections and corrections.court_geometry
                      else _DEFAULT_COURT)
 

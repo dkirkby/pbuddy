@@ -111,7 +111,6 @@ class Pass1RawResult(BaseModel):
 
 
 class Pass1CorrectionPayload(BaseModel):
-    stable_bounds: StableBounds | None = None
     court_geometry: CourtGeometry | None = None
 
 

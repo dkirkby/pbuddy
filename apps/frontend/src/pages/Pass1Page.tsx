@@ -19,6 +19,12 @@ const DEFAULT_COURT: CourtGeometry = {
   bottom_right: { x: 0.95 * BG_W, y: 0.90 * BG_H },
 }
 
+function fmtTime(s: number): string {
+  const m = Math.floor(s / 60)
+  const sec = Math.round(s % 60)
+  return `${m}m ${sec.toString().padStart(2, '0')}s`
+}
+
 export default function Pass1Page() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -76,7 +82,6 @@ export default function Pass1Page() {
     setStatusMsg(null)
     try {
       await api.submitPass1Corrections(projectId!, {
-        stable_bounds: editor.stableBounds,
         court_geometry: editor.courtGeometry,
       })
       editor.markClean()
@@ -121,31 +126,9 @@ export default function Pass1Page() {
           <section style={{ marginBottom: 24 }}>
             <h3 style={{ marginTop: 0 }}>Stable Video Bounds</h3>
             {editor.stableBounds ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <label>
-                  In (s):&nbsp;
-                  <input
-                    type="number"
-                    value={editor.stableBounds.in_time_s}
-                    step={0.5} min={0}
-                    onChange={(e) =>
-                      editor.setStableBounds({ ...editor.stableBounds!, in_time_s: +e.target.value })
-                    }
-                    style={{ width: 80 }}
-                  />
-                </label>
-                <label>
-                  Out (s):&nbsp;
-                  <input
-                    type="number"
-                    value={editor.stableBounds.out_time_s}
-                    step={0.5}
-                    onChange={(e) =>
-                      editor.setStableBounds({ ...editor.stableBounds!, out_time_s: +e.target.value })
-                    }
-                    style={{ width: 80 }}
-                  />
-                </label>
+              <div style={{ fontSize: 13, color: '#444', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>In:&nbsp; <strong>{fmtTime(editor.stableBounds.in_time_s)}</strong></div>
+                <div>Out: <strong>{fmtTime(editor.stableBounds.out_time_s)}</strong></div>
               </div>
             ) : <p style={{ color: '#aaa' }}>Loading…</p>}
           </section>

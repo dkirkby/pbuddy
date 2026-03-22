@@ -6,7 +6,6 @@ interface EditorState {
   courtGeometry: CourtGeometry | null
   isDirty: boolean
 
-  setStableBounds: (v: StableBounds) => void
   setCourtGeometry: (v: CourtGeometry) => void
   initFromRaw: (bounds: StableBounds, court: CourtGeometry) => void
   markClean: () => void
@@ -18,7 +17,6 @@ export const useEditorStore = create<EditorState>((set) => ({
   courtGeometry: null,
   isDirty: false,
 
-  setStableBounds: (v) => set({ stableBounds: v, isDirty: true }),
   setCourtGeometry: (v) => set({ courtGeometry: v, isDirty: true }),
   initFromRaw: (bounds, court) =>
     set({ stableBounds: bounds, courtGeometry: court, isDirty: false }),

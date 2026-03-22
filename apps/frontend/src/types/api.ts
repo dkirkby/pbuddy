@@ -66,7 +66,6 @@ export interface Pass1RawResult {
 }
 
 export interface Pass1CorrectionPayload {
-  stable_bounds?: StableBounds | null
   court_geometry?: CourtGeometry | null
 }
 
