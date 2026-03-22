@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 # ---------------------------------------------------------------------------
@@ -105,29 +105,17 @@ class CourtGeometry(BaseModel):
     net_right: CourtCorner | None = None
 
 
-class BallColorModel(BaseModel):
-    hsv_lower: list[float] = Field(..., min_length=3, max_length=3)
-    hsv_upper: list[float] = Field(..., min_length=3, max_length=3)
-
-
 class Pass1RawResult(BaseModel):
     stable_bounds: StableBounds
-    court_geometry: CourtGeometry
-    ball_color_model: BallColorModel
     median_background_path: str   # relative to project root
-    court_overlay_path: str       # relative to project root
-    confidence: dict[str, float]
 
 
 class Pass1CorrectionPayload(BaseModel):
     stable_bounds: StableBounds | None = None
     court_geometry: CourtGeometry | None = None
-    ball_color_model: BallColorModel | None = None
 
 
 class Pass1AcceptedOutput(BaseModel):
     stable_bounds: StableBounds
     court_geometry: CourtGeometry
-    ball_color_model: BallColorModel
     median_background_artifact_id: str
-    calibration_confidence: float

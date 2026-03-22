@@ -135,12 +135,37 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
     logger.info("Completed %s job=%s", job.pass_name, job.id)
 
 
+def _recover_stale_jobs(session_factory) -> None:
+    """Reset any jobs left in 'running' state from a previous worker process.
+
+    This handles the case where the worker was killed mid-job.  The job is reset
+    to 'queued' so it will be picked up and re-executed on the next poll cycle.
+    """
+    from sqlalchemy import select, update
+    with session_factory() as session:
+        stale = session.execute(
+            select(Job).where(Job.status == "running")
+        ).scalars().all()
+        if not stale:
+            return
+        for job in stale:
+            logger.warning(
+                "Recovering stale job=%s pass=%s project=%s (was running, resetting to queued)",
+                job.id, job.pass_name, job.project_id,
+            )
+            job.status = "queued"
+            job.started_at = None
+            job.claimed_by = None
+        session.commit()
+
+
 def run_worker(settings: Settings) -> None:
     """Blocking worker loop; polls for jobs and executes them."""
     engine = get_engine(settings.db_path)
     init_db(engine)
     session_factory = get_session_factory(engine)
 
+    _recover_stale_jobs(session_factory)
     logger.info("Worker started, polling every %.1fs", settings.worker_poll_interval_s)
 
     while True:

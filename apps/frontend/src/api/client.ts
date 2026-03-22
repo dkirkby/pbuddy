@@ -31,6 +31,11 @@ export const api = {
 
   getProject: (id: string) => get<ProjectDetail>(`/api/projects/${id}`),
 
+  deleteProject: (id: string) =>
+    fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => {
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`)
+    }),
+
   uploadVideo: async (projectId: string, file: File) => {
     const form = new FormData()
     form.append('file', file)

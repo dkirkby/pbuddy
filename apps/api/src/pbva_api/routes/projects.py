@@ -164,6 +164,22 @@ async def upload_video(
     return {"ok": True, "data": _project_to_detail(project)}
 
 
+@router.delete("/{project_id}", status_code=204)
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    root = Path(project.root_path)
+    db.delete(project)
+    db.commit()
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+
+
 @router.get("/{project_id}/video/metadata")
 def video_metadata(project_id: str, db: Session = Depends(get_db)):
     project = db.get(Project, project_id)

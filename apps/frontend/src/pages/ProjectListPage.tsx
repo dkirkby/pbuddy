@@ -10,6 +10,19 @@ export default function ProjectListPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
+
+  async function handleDelete(e: React.MouseEvent, projectId: string) {
+    e.stopPropagation()
+    if (!confirm('Delete this project and all its data?')) return
+    setDeleting(projectId)
+    try {
+      await api.deleteProject(projectId)
+      qc.invalidateQueries({ queryKey: ['projects'] })
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
@@ -73,6 +86,7 @@ export default function ProjectListPage() {
           style={{
             border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 12,
             cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center',
           }}
         >
           <div>
@@ -82,9 +96,21 @@ export default function ProjectListPage() {
               {p.video_width ? ` · ${p.video_width}×${p.video_height}` : ''}
             </div>
           </div>
-          <div style={{ fontSize: 12, color: '#888', textAlign: 'right' }}>
-            <div>{p.status}</div>
-            <div>{new Date(p.created_at).toLocaleDateString()}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ fontSize: 12, color: '#888', textAlign: 'right' }}>
+              <div>{p.status}</div>
+              <div>{new Date(p.created_at).toLocaleDateString()}</div>
+            </div>
+            <button
+              onClick={(e) => handleDelete(e, p.id)}
+              disabled={deleting === p.id}
+              style={{
+                padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+                background: '#fff', color: '#c00', border: '1px solid #c00', borderRadius: 4,
+              }}
+            >
+              {deleting === p.id ? '…' : 'Delete'}
+            </button>
           </div>
         </div>
       ))}

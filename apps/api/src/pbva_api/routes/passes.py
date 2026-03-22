@@ -18,6 +18,7 @@ from pbva_core.types import (
     Pass1CorrectionPayload,
     PassStatusSummary,
 )
+
 from pbva_db.models import Artifact, Job, Pass, Project
 from pbva_api.dependencies import get_db, get_settings
 
@@ -57,7 +58,12 @@ def run_pass(
     project = _get_project_or_404(db, project_id)
     pass_row = _get_pass_or_404(db, project_id, pass_name)
 
-    _VALID_RUN_STATES = {PassState.not_started.value, PassState.failed.value}
+    _VALID_RUN_STATES = {
+        PassState.not_started.value,
+        PassState.failed.value,
+        PassState.waiting_for_user.value,
+        PassState.accepted.value,
+    }
     if pass_row.state not in _VALID_RUN_STATES:
         raise HTTPException(
             status_code=409,
@@ -76,10 +82,17 @@ def run_pass(
     )
     db.add(job)
 
-    # Update pass state.
+    # Reset pass state and clear stale artifact pointers.
     pass_row.state = PassState.queued.value
     pass_row.current_job_id = job_id
+    pass_row.latest_raw_artifact_id = None
+    pass_row.latest_correction_id = None
+    pass_row.latest_accepted_artifact_id = None
     pass_row.updated_at = _utcnow()
+
+    # Reset project status so the UI reflects that the pass is re-running.
+    project.status = ProjectStatus.pass1_ready.value
+    project.updated_at = _utcnow()
 
     db.commit()
 
@@ -190,6 +203,7 @@ def submit_pass1_corrections(
     db.commit()
 
     return {"ok": True}
+
 
 
 @router.post("/{project_id}/passes/pass1/accept")

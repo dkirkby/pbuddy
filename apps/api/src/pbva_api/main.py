@@ -78,8 +78,6 @@ async def lifespan(app: FastAPI):
     try:
         _worker_process = subprocess.Popen(
             [sys.executable, "-m", "pbva_worker.main"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
         )
         logger.info("Started worker process pid=%d", _worker_process.pid)
     except Exception as e:

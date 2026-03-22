@@ -18,6 +18,9 @@ def detect_stable_bounds(
     motion_threshold: float = 6.0,
     smoothing_window: int = 5,
     min_stable_s: float = 30.0,
+    progress_callback=None,
+    progress_start: float = 0.0,
+    progress_end: float = 1.0,
 ) -> StableBounds:
     """Return the stable in/out timestamps of the video.
 
@@ -57,6 +60,9 @@ def detect_stable_bounds(
                     frames.append(small.astype(np.float32))
                     ts = float(frame.pts * stream.time_base)
                     timestamps.append(ts)
+                    if progress_callback is not None and len(frames) % 30 == 0 and duration_s > 0:
+                        frac = progress_start + (progress_end - progress_start) * min(ts / duration_s, 1.0)
+                        progress_callback(frac, f"Scanning frame at {ts:.0f}s / {duration_s:.0f}s")
                 frame_idx += 1
 
     if len(frames) < 3:

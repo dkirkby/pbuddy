@@ -4,29 +4,19 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { CourtOverlay } from '../components/CourtOverlay'
 import { useEditorStore } from '../state/editorStore'
-import type { ArtifactRef, Pass1RawResult } from '../types/api'
+import type { ArtifactRef, CourtGeometry, Pass1RawResult } from '../types/api'
 
 // Working resolution of median background image.
 const BG_W = 960
 const BG_H = 540
 
-/** Convert HSV (OpenCV range H∈[0,180], S∈[0,255], V∈[0,255]) to CSS hex. */
-function hsvToHex([h, s, v]: number[]): string {
-  const H = (h / 180) * 360
-  const S = s / 255
-  const V = v / 255
-  const c = V * S
-  const x = c * (1 - Math.abs(((H / 60) % 2) - 1))
-  const m = V - c
-  let r = 0, g = 0, b = 0
-  if (H < 60) { r = c; g = x }
-  else if (H < 120) { r = x; g = c }
-  else if (H < 180) { g = c; b = x }
-  else if (H < 240) { g = x; b = c }
-  else if (H < 300) { r = x; b = c }
-  else { r = c; b = x }
-  const toHex = (n: number) => Math.round((n + m) * 255).toString(16).padStart(2, '0')
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+// Default court corners (normalized screen coords → pixel coords).
+// Matches the initial overlay shown before the user refines by dragging.
+const DEFAULT_COURT: CourtGeometry = {
+  top_left:     { x: 0.35 * BG_W, y: 0.30 * BG_H },
+  top_right:    { x: 0.65 * BG_W, y: 0.30 * BG_H },
+  bottom_left:  { x: 0.05 * BG_W, y: 0.90 * BG_H },
+  bottom_right: { x: 0.95 * BG_W, y: 0.90 * BG_H },
 }
 
 export default function Pass1Page() {
@@ -50,7 +40,8 @@ export default function Pass1Page() {
   const bgArtifact = artifacts.find(
     (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background')
   )
-  // Load raw result JSON.
+
+  // Load raw result JSON (needed for stable_bounds).
   const { data: rawResult } = useQuery<Pass1RawResult>({
     queryKey: ['pass1-raw', projectId],
     queryFn: async () => {
@@ -68,24 +59,25 @@ export default function Pass1Page() {
   })
 
   useEffect(() => {
-    if (!rawResult || editor.courtGeometry) return
-    const corr = corrResp?.data
+    editor.reset()
+  }, [projectId])
+
+  useEffect(() => {
+    if (!rawResult || corrResp === undefined) return
     editor.initFromRaw(
-      corr?.stable_bounds ?? rawResult.stable_bounds,
-      corr?.court_geometry ?? rawResult.court_geometry,
-      corr?.ball_color_model ?? rawResult.ball_color_model,
+      corrResp.data?.stable_bounds ?? rawResult.stable_bounds,
+      corrResp.data?.court_geometry ?? DEFAULT_COURT,
     )
   }, [rawResult, corrResp])
 
   async function handleSave() {
-    if (!editor.stableBounds || !editor.courtGeometry || !editor.ballColorModel) return
+    if (!editor.stableBounds || !editor.courtGeometry) return
     setSaving(true)
     setStatusMsg(null)
     try {
       await api.submitPass1Corrections(projectId!, {
         stable_bounds: editor.stableBounds,
         court_geometry: editor.courtGeometry,
-        ball_color_model: editor.ballColorModel,
       })
       editor.markClean()
       setStatusMsg('Corrections saved.')
@@ -158,48 +150,6 @@ export default function Pass1Page() {
             ) : <p style={{ color: '#aaa' }}>Loading…</p>}
           </section>
 
-          {/* Ball colour */}
-          <section style={{ marginBottom: 24 }}>
-            <h3 style={{ marginTop: 0 }}>Ball Color (HSV)</h3>
-            {editor.ballColorModel ? (
-              <div style={{ fontSize: 13 }}>
-                <div>Lower: <span style={{ fontFamily: 'monospace' }}>
-                  H={editor.ballColorModel.hsv_lower[0].toFixed(0)}{' '}
-                  S={editor.ballColorModel.hsv_lower[1].toFixed(0)}{' '}
-                  V={editor.ballColorModel.hsv_lower[2].toFixed(0)}
-                </span></div>
-                <div>Upper: <span style={{ fontFamily: 'monospace' }}>
-                  H={editor.ballColorModel.hsv_upper[0].toFixed(0)}{' '}
-                  S={editor.ballColorModel.hsv_upper[1].toFixed(0)}{' '}
-                  V={editor.ballColorModel.hsv_upper[2].toFixed(0)}
-                </span></div>
-                <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-                  <div title="Lower" style={{ width: 32, height: 32, borderRadius: 4, border: '1px solid #ccc', background: hsvToHex(editor.ballColorModel.hsv_lower) }} />
-                  <div title="Upper" style={{ width: 32, height: 32, borderRadius: 4, border: '1px solid #ccc', background: hsvToHex(editor.ballColorModel.hsv_upper) }} />
-                </div>
-              </div>
-            ) : <p style={{ color: '#aaa' }}>Loading…</p>}
-          </section>
-
-          {/* Confidence */}
-          {rawResult && (
-            <section style={{ marginBottom: 24 }}>
-              <h3 style={{ marginTop: 0 }}>Confidence</h3>
-              {Object.entries(rawResult.confidence).map(([k, v]) => (
-                <div key={k} style={{ fontSize: 13, marginBottom: 6 }}>
-                  {k}: <strong>{(v * 100).toFixed(0)}%</strong>
-                  <div style={{ background: '#eee', borderRadius: 4, height: 6, marginTop: 2 }}>
-                    <div style={{
-                      width: `${Math.min(v * 100, 100)}%`,
-                      background: v > 0.5 ? '#0a0' : '#f90',
-                      borderRadius: 4, height: 6,
-                    }} />
-                  </div>
-                </div>
-              ))}
-            </section>
-          )}
-
           {/* Action buttons */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {editor.isDirty && (
@@ -227,7 +177,7 @@ export default function Pass1Page() {
         <div style={{ flex: '1 1 600px' }}>
           <h3 style={{ marginTop: 0 }}>Median Background</h3>
           <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
-            Drag the blue handles to adjust the four court corners. Interior lines and net are computed automatically.
+            Drag the blue handles to align the four court corners. Interior lines and net are computed automatically.
           </p>
           <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
             {bgUrl ? (

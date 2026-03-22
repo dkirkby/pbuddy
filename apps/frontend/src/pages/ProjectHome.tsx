@@ -82,8 +82,7 @@ export default function ProjectHome() {
           </span>
         </div>
         <p style={{ color: '#555', fontSize: 14 }}>
-          Detects stable video bounds, generates median background, finds court geometry,
-          and profiles ball colour.
+          Detects stable video bounds and generates a median background image for court alignment.
         </p>
 
         {/* Progress bar */}
@@ -102,7 +101,7 @@ export default function ProjectHome() {
           </div>
         )}
 
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
           {(pass1?.state === 'not_started' || pass1?.state === 'failed') && (
             <button
               onClick={() => runPass1.mutate()}
@@ -122,6 +121,15 @@ export default function ProjectHome() {
           )}
           {pass1?.state === 'accepted' && (
             <span style={{ color: '#090' }}>✓ Accepted</span>
+          )}
+          {(pass1?.state === 'waiting_for_user' || pass1?.state === 'accepted') && (
+            <button
+              onClick={() => runPass1.mutate()}
+              disabled={runPass1.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+            >
+              {runPass1.isPending ? 'Queuing…' : 'Re-run'}
+            </button>
           )}
         </div>
       </div>

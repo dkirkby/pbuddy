@@ -55,11 +55,6 @@ export interface CourtGeometry {
   bottom_right: CourtCorner
 }
 
-export interface BallColorModel {
-  hsv_lower: [number, number, number]
-  hsv_upper: [number, number, number]
-}
-
 export interface StableBounds {
   in_time_s: number
   out_time_s: number
@@ -67,17 +62,12 @@ export interface StableBounds {
 
 export interface Pass1RawResult {
   stable_bounds: StableBounds
-  court_geometry: CourtGeometry
-  ball_color_model: BallColorModel
   median_background_path: string
-  court_overlay_path: string
-  confidence: Record<string, number>
 }
 
 export interface Pass1CorrectionPayload {
   stable_bounds?: StableBounds | null
   court_geometry?: CourtGeometry | null
-  ball_color_model?: BallColorModel | null
 }
 
 export interface WsEvent {

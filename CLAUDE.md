@@ -12,7 +12,7 @@ Milestone 1 (Pass 1 end-to-end: upload → run → review → accept) is impleme
 
 ## Technology Stack
 
-**Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`)
+**Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`); monorepo workspace packages: `pbva-core`, `pbva-db`, `pbva-pipeline`, `pbva-api`, `pbva-worker`
 
 **Frontend:** React + TypeScript + Vite, with TanStack Query, Zustand, Canvas/SVG overlays
 
@@ -26,13 +26,19 @@ Milestone 1 (Pass 1 end-to-end: upload → run → review → accept) is impleme
 # First-time setup: install Python deps (uv manages its own Python via .python-version)
 uv sync
 
+# First-time frontend setup
+cd apps/frontend && npm install
+
 # Start the backend API server (also spawns the worker subprocess)
 ./scripts/dev_api.sh
 
-# Start the frontend dev server
+# Start the frontend dev server (proxies /api and /ws to localhost:8000)
 ./scripts/dev_frontend.sh
 
-# Run backend tests
+# Start the worker subprocess independently (useful for debugging)
+./scripts/dev_worker.sh
+
+# Run backend tests (asyncio_mode = "auto" is configured globally)
 uv run pytest
 
 # Run a single test
@@ -91,6 +97,10 @@ data/projects/<project_id>/
 - `jobs` — async job queue (queued → running → succeeded/failed)
 - `artifacts` — registry with roles: raw, correction, accepted
 - `events` — append-only log for WebSocket progress streaming
+
+### Test Structure
+
+Tests are organized in three tiers under `tests/`: `unit/` (fast, isolated), `integration/` (requires DB/filesystem), and `e2e/` (browser automation via Playwright). Slow tests are gated by the `slow` marker.
 
 ### API Pattern
 
