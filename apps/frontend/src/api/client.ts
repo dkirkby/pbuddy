@@ -67,8 +67,8 @@ export const api = {
   acceptPass1: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass1/accept`),
 
-  runPass2: (projectId: string) =>
-    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass2/run`),
+  runPass2: (projectId: string, opts?: { max_duration_s?: number; resume?: boolean }) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass2/run`, opts ?? {}),
 
   getPass2Artifacts: (projectId: string) =>
     get<{ ok: boolean; data: ArtifactRef[] }>(`/api/projects/${projectId}/passes/pass2/artifacts`),
@@ -78,6 +78,9 @@ export const api = {
     if (!res.ok) throw new Error(`Failed to fetch detections: ${res.status}`)
     return res.json()
   },
+
+  cancelPass2: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/cancel`),
 
   acceptPass2: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),

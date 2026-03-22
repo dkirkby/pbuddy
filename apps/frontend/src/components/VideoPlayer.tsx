@@ -1,31 +1,24 @@
 /**
- * VideoPlayer — HTML5 video element with a canvas overlay for detection ellipses
- * and an optional court outline. Supports forward/backward playback at 4 speeds.
+ * VideoPlayer — HTML5 video with canvas overlay for detections and court lines.
  *
- * State machine:
- *   stopped → playing-forward | playing-backward
- *   playing-forward → stopped (pause or end of video)
- *   playing-backward → stopped (pause or start of video)
- * Speed and direction are independent; switching direction always passes through stopped.
+ * Buttons:  ⏮  ◀◀  ◀|  ▶/⏸  |▶  ▶▶  ?
+ * Keys:     —   ⇧←  ←   Space   →   ⇧→  —
+ *
+ * ◀◀ / ▶▶  play at 2× in that direction while held (button or keyboard shortcut)
+ * ◀| / |▶  step one frame per press; hold for continuous stepping
+ * ⏮        rewind to the beginning
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CourtGeometry, Detection } from '../types/api'
 
-const SPEEDS = [0.25, 0.5, 1.0, 3.0] as const
-type Speed = (typeof SPEEDS)[number]
-type PlaybackState = 'stopped' | 'playing-forward' | 'playing-backward'
+// ─── Court geometry helpers ──────────────────────────────────────────────────
 
-// Court proportions (normalized 0–1): net at 0.5, kitchen lines at ±7/44 from net.
 const KV = (22 - 7) / 44
 const COURT_LINES = [
-  // Outer boundary
-  [0, 0, 1, 0], [1, 0, 1, 1], [1, 1, 0, 1], [0, 1, 0, 0],
-  // Net
-  [0, 0.5, 1, 0.5],
-  // Kitchen lines
-  [0, KV, 1, KV], [0, 1 - KV, 1, 1 - KV],
-  // Center lines (between kitchen and baseline)
-  [0.5, 0, 0.5, KV], [0.5, 1 - KV, 0.5, 1],
+  [0, 0, 1, 0], [1, 0, 1, 1], [1, 1, 0, 1], [0, 1, 0, 0], // boundary
+  [0, 0.5, 1, 0.5],                                          // net
+  [0, KV, 1, KV], [0, 1 - KV, 1, 1 - KV],                  // kitchen lines
+  [0.5, 0, 0.5, KV], [0.5, 1 - KV, 0.5, 1],                // centre lines
 ] as const
 
 function buildH(g: CourtGeometry): number[] {
@@ -53,6 +46,10 @@ function fmtTime(s: number): string {
   return `${m}m ${sec.toString().padStart(2, '0')}s`
 }
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+type PlaybackState = 'stopped' | 'playing' | 'fast-forward' | 'fast-reverse'
+
 interface Props {
   videoUrl: string
   fps: number
@@ -63,74 +60,70 @@ interface Props {
   totalFrames: number
 }
 
+// ─── Component ───────────────────────────────────────────────────────────────
+
 export function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, courtGeometry, totalFrames,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped')
-  const [speed, setSpeed] = useState<Speed>(1.0)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showCourt, setShowCourt] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [detCount, setDetCount] = useState(0)
 
-  // Refs for reverse playback loop to avoid stale closures.
-  const playbackStateRef = useRef(playbackState)
-  const speedRef = useRef(speed)
+  // Refs so event handlers and intervals see current values without stale closures.
+  const playbackStateRef = useRef<PlaybackState>('stopped')
+  const fpsRef = useRef(fps)
   const isSeekingRef = useRef(false)
-  const rafRef = useRef<number | null>(null)
+  const reverseRafRef = useRef<number | null>(null)   // rAF id for fast-reverse seek loop
+  const forwardRafRef = useRef<number | null>(null)   // rAF id for canvas-sync during forward play
+  const stepTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => { playbackStateRef.current = playbackState }, [playbackState])
-  useEffect(() => { speedRef.current = speed }, [speed])
+  useEffect(() => { fpsRef.current = fps }, [fps])
 
-  // Draw detections + court outline on the canvas for the current video frame.
+  // ── Canvas drawing ──────────────────────────────────────────────────────────
+
   const drawOverlay = useCallback(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return
-
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // Sync canvas size to displayed video size.
     const dw = video.clientWidth
     const dh = video.clientHeight
     if (canvas.width !== dw || canvas.height !== dh) {
       canvas.width = dw
       canvas.height = dh
     }
-
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const frameIndex = Math.round(video.currentTime * fps)
     const dets = detections[frameIndex] ?? []
-
     setCurrentTime(video.currentTime)
     setDetCount(dets.length)
 
-    const scaleX = canvas.width / bgWidth
-    const scaleY = canvas.height / bgHeight
+    const sx = canvas.width / bgWidth
+    const sy = canvas.height / bgHeight
 
-    // Draw detection ellipses.
     ctx.strokeStyle = 'rgba(255, 120, 0, 0.85)'
     ctx.lineWidth = 2
     for (const det of dets) {
-      const angleRad = (det.angle * Math.PI) / 180
       ctx.beginPath()
       ctx.ellipse(
-        det.cx * scaleX,
-        det.cy * scaleY,
-        Math.max(det.a * scaleX, 1),
-        Math.max(det.b * scaleY, 1),
-        angleRad,
-        0,
-        2 * Math.PI,
+        det.cx * sx, det.cy * sy,
+        Math.max(det.a * sx, 1), Math.max(det.b * sy, 1),
+        (det.angle * Math.PI) / 180, 0, 2 * Math.PI,
       )
       ctx.stroke()
     }
 
-    // Draw court outline.
     if (showCourt && courtGeometry) {
       const H = buildH(courtGeometry)
       ctx.lineWidth = 1.5
@@ -140,156 +133,233 @@ export function VideoPlayer({
         const [x0, y0] = applyH(H, u0, v0)
         const [x1, y1] = applyH(H, u1, v1)
         ctx.beginPath()
-        ctx.moveTo(x0 * scaleX, y0 * scaleY)
-        ctx.lineTo(x1 * scaleX, y1 * scaleY)
+        ctx.moveTo(x0 * sx, y0 * sy)
+        ctx.lineTo(x1 * sx, y1 * sy)
         ctx.stroke()
       }
     }
   }, [fps, bgWidth, bgHeight, detections, showCourt, courtGeometry])
 
-  // Redraw on timeupdate (forward playback) or after seeking.
+  // ── seeked: redraw canvas; also drives the fast-reverse seek loop ───────────
+
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
-    function onTimeUpdate() {
-      if (playbackStateRef.current === 'playing-forward') drawOverlay()
-    }
-    function onDurationChange() {
-      setDuration(video!.duration || 0)
-    }
-    function onEnded() {
-      setPlaybackState('stopped')
-      drawOverlay()
+    function stepBack() {
+      if (!video || isSeekingRef.current) return
+      isSeekingRef.current = true
+      video.currentTime = Math.max(0, video.currentTime - 2 / fpsRef.current)
     }
 
-    video.addEventListener('timeupdate', onTimeUpdate)
+    function onSeeked() {
+      drawOverlay()
+      if (playbackStateRef.current !== 'fast-reverse') return
+      isSeekingRef.current = false
+      if (video!.currentTime <= 0) {
+        setPlaybackState('stopped')
+        return
+      }
+      reverseRafRef.current = requestAnimationFrame(stepBack)
+    }
+
+    function onDurationChange() { setDuration(video!.duration || 0) }
+    function onEnded() { setPlaybackState('stopped'); drawOverlay() }
+
+    video.addEventListener('seeked', onSeeked)
     video.addEventListener('durationchange', onDurationChange)
     video.addEventListener('ended', onEnded)
     return () => {
-      video.removeEventListener('timeupdate', onTimeUpdate)
+      video.removeEventListener('seeked', onSeeked)
       video.removeEventListener('durationchange', onDurationChange)
       video.removeEventListener('ended', onEnded)
     }
   }, [drawOverlay])
 
-  // Reverse playback: step backward one frame per rAF tick, wait for seeked event.
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+  // ── rAF canvas-sync loop during forward playback ────────────────────────────
 
-    function onSeeked() {
-      drawOverlay()
-      isSeekingRef.current = false
-      if (playbackStateRef.current !== 'playing-backward') return
-      if (video!.currentTime <= 0) {
-        setPlaybackState('stopped')
-        return
+  useEffect(() => {
+    const isForward = playbackState === 'playing' || playbackState === 'fast-forward'
+    if (!isForward) {
+      if (forwardRafRef.current !== null) {
+        cancelAnimationFrame(forwardRafRef.current)
+        forwardRafRef.current = null
       }
-      rafRef.current = requestAnimationFrame(stepBack)
+      return
     }
-
-    function stepBack() {
-      if (!video || isSeekingRef.current) return
-      isSeekingRef.current = true
-      const newTime = Math.max(0, video.currentTime - (1 / fps) * speedRef.current)
-      video.currentTime = newTime
+    function tick() {
+      drawOverlay()
+      if (playbackStateRef.current === 'playing' || playbackStateRef.current === 'fast-forward') {
+        forwardRafRef.current = requestAnimationFrame(tick)
+      }
     }
+    forwardRafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (forwardRafRef.current !== null) {
+        cancelAnimationFrame(forwardRafRef.current)
+        forwardRafRef.current = null
+      }
+    }
+  }, [playbackState, drawOverlay])
 
-    video.addEventListener('seeked', onSeeked)
-    return () => video.removeEventListener('seeked', onSeeked)
-  }, [fps, drawOverlay])
+  // ── Drive the video element when playback state changes ────────────────────
 
-  // Start/stop playback based on state changes.
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
-    if (playbackState === 'playing-forward') {
-      video.playbackRate = speed
+    const cancelReverse = () => {
+      if (reverseRafRef.current !== null) {
+        cancelAnimationFrame(reverseRafRef.current)
+        reverseRafRef.current = null
+      }
+    }
+
+    if (playbackState === 'playing') {
+      cancelReverse()
+      video.playbackRate = 1
       video.play().catch(() => setPlaybackState('stopped'))
-    } else if (playbackState === 'playing-backward') {
+    } else if (playbackState === 'fast-forward') {
+      cancelReverse()
+      video.playbackRate = 2
+      video.play().catch(() => setPlaybackState('stopped'))
+    } else if (playbackState === 'fast-reverse') {
       video.pause()
       isSeekingRef.current = false
-      // Trigger the first step; subsequent steps happen in onSeeked.
-      rafRef.current = requestAnimationFrame(() => {
+      reverseRafRef.current = requestAnimationFrame(() => {
         if (!video || isSeekingRef.current) return
         isSeekingRef.current = true
-        video.currentTime = Math.max(0, video.currentTime - (1 / fps) * speed)
+        video.currentTime = Math.max(0, video.currentTime - 2 / fpsRef.current)
       })
     } else {
+      // stopped
+      cancelReverse()
       video.pause()
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
     }
 
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [playbackState, speed, fps])
+    return cancelReverse
+  }, [playbackState])
 
-  // Update speed on forward playback without toggling state.
-  useEffect(() => {
+  // ── Frame-step helpers used by both buttons and keyboard ────────────────────
+
+  function stopStepping() {
+    if (stepTimeoutRef.current !== null) { clearTimeout(stepTimeoutRef.current); stepTimeoutRef.current = null }
+    if (stepIntervalRef.current !== null) { clearInterval(stepIntervalRef.current); stepIntervalRef.current = null }
+  }
+
+  function startStepping(delta: number) {
     const video = videoRef.current
-    if (video && playbackState === 'playing-forward') {
-      video.playbackRate = speed
-    }
-  }, [speed, playbackState])
-
-  function handlePlayPause() {
-    if (playbackState === 'stopped') {
-      setPlaybackState('playing-forward')
-    } else {
+    if (!video) return
+    // Immediately stop any forward/reverse playback.
+    if (playbackStateRef.current !== 'stopped') {
+      video.pause()
+      if (reverseRafRef.current !== null) { cancelAnimationFrame(reverseRafRef.current); reverseRafRef.current = null }
       setPlaybackState('stopped')
     }
+    const step = () => {
+      const v = videoRef.current
+      if (v) v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta / fpsRef.current))
+    }
+    step() // immediate
+    // After 300 ms hold, repeat at ~30 steps/s.
+    stepTimeoutRef.current = setTimeout(() => {
+      stepIntervalRef.current = setInterval(step, 1000 / 30)
+    }, 300)
   }
 
-  function handleBackward3x() {
+  // Clean up step timers on unmount.
+  useEffect(() => () => stopStepping(), [])
+
+  // ── Keyboard shortcuts ──────────────────────────────────────────────────────
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Don't capture keys when typing in form fields.
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (!e.repeat) {
+          setPlaybackState(p =>
+            p === 'playing' ? 'stopped' : p === 'stopped' ? 'playing' : 'stopped'
+          )
+        }
+        return
+      }
+
+      if (e.code === 'ArrowRight') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          if (!e.repeat && playbackStateRef.current !== 'fast-forward') setPlaybackState('fast-forward')
+        } else {
+          // Allow browser key-repeat to give continuous stepping.
+          startStepping(1)
+        }
+        return
+      }
+
+      if (e.code === 'ArrowLeft') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          if (!e.repeat && playbackStateRef.current !== 'fast-reverse') setPlaybackState('fast-reverse')
+        } else {
+          startStepping(-1)
+        }
+        return
+      }
+    }
+
+    function handleKeyUp(e: KeyboardEvent) {
+      const s = playbackStateRef.current
+      if (s === 'fast-forward' || s === 'fast-reverse') {
+        if (
+          e.code === 'ArrowRight' || e.code === 'ArrowLeft' ||
+          e.code === 'ShiftLeft' || e.code === 'ShiftRight'
+        ) {
+          setPlaybackState('stopped')
+        }
+      }
+      // Stop mouse-hold stepping on key release too.
+      if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') stopStepping()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('keyup', handleKeyUp)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('keyup', handleKeyUp)
+    }
+  }, []) // uses refs — no deps needed
+
+  // ── Button actions ──────────────────────────────────────────────────────────
+
+  function handleRewind() {
+    const video = videoRef.current
+    if (!video) return
+    stopStepping()
     setPlaybackState('stopped')
-    setTimeout(() => {
-      speedRef.current = 3.0
-      setSpeed(3.0)
-      setPlaybackState('playing-backward')
-    }, 0)
+    video.currentTime = 0
   }
 
-  function handleBackward1x() {
-    setPlaybackState('stopped')
-    setTimeout(() => {
-      speedRef.current = 1.0
-      setSpeed(1.0)
-      setPlaybackState('playing-backward')
-    }, 0)
-  }
-
-  function handleForward3x() {
-    setPlaybackState('stopped')
-    setTimeout(() => {
-      speedRef.current = 3.0
-      setSpeed(3.0)
-      setPlaybackState('playing-forward')
-    }, 0)
+  function handlePlayPause() {
+    setPlaybackState(p => p === 'playing' ? 'stopped' : p === 'stopped' ? 'playing' : 'stopped')
   }
 
   const frameIndex = Math.round(currentTime * fps)
 
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  const btnStyle: React.CSSProperties = { padding: '4px 10px', fontSize: 15, cursor: 'pointer', userSelect: 'none' }
+
   return (
     <div>
-      {/* Video + overlay */}
+      {/* Video + canvas overlay */}
       <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
         <video
           ref={videoRef}
           src={videoUrl}
           style={{ display: 'block', maxWidth: '100%', maxHeight: 540 }}
-          onLoadedMetadata={() => {
-            setDuration(videoRef.current?.duration ?? 0)
-            drawOverlay()
-          }}
+          onLoadedMetadata={() => { setDuration(videoRef.current?.duration ?? 0); drawOverlay() }}
         />
         <canvas
           ref={canvasRef}
@@ -297,46 +367,105 @@ export function VideoPlayer({
         />
       </div>
 
-      {/* Controls */}
-      <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-        <button onClick={handleBackward3x} title="3× backward">◀◀</button>
-        <button onClick={handleBackward1x} title="1× backward">◀</button>
-        <button onClick={handlePlayPause} style={{ minWidth: 48 }}>
-          {playbackState !== 'stopped' ? '⏸' : '▶'}
+      {/* Playback controls */}
+      <div style={{ marginTop: 10, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Rewind */}
+        <button onClick={handleRewind} title="Rewind to beginning" style={btnStyle}>⏮</button>
+
+        {/* 2× reverse — active while held */}
+        <button
+          onPointerDown={() => setPlaybackState('fast-reverse')}
+          onPointerUp={() => setPlaybackState(s => s === 'fast-reverse' ? 'stopped' : s)}
+          onPointerLeave={() => setPlaybackState(s => s === 'fast-reverse' ? 'stopped' : s)}
+          title="2× fast reverse — hold (⇧←)"
+          style={btnStyle}
+        >◀◀</button>
+
+        {/* Frame reverse — continuous while held */}
+        <button
+          onPointerDown={() => startStepping(-1)}
+          onPointerUp={stopStepping}
+          onPointerLeave={stopStepping}
+          title="One frame back — hold to continue (←)"
+          style={btnStyle}
+        >◀|</button>
+
+        {/* Play / Pause */}
+        <button
+          onClick={handlePlayPause}
+          title="Play / Pause (Space)"
+          style={{ ...btnStyle, minWidth: 44 }}
+        >
+          {playbackState === 'playing' ? '⏸' : '▶'}
         </button>
-        <button onClick={handleForward3x} title="3× forward">▶▶</button>
 
-        <span style={{ marginLeft: 8, fontSize: 13, color: '#555' }}>Speed:</span>
-        {SPEEDS.map((s) => (
-          <button
-            key={s}
-            onClick={() => setSpeed(s)}
-            style={{
-              padding: '2px 8px', fontSize: 12,
-              background: speed === s ? '#09f' : '#eee',
-              color: speed === s ? '#fff' : '#333',
-              border: '1px solid #ccc', borderRadius: 3,
-            }}
-          >
-            {s}×
-          </button>
-        ))}
-      </div>
+        {/* Frame advance — continuous while held */}
+        <button
+          onPointerDown={() => startStepping(1)}
+          onPointerUp={stopStepping}
+          onPointerLeave={stopStepping}
+          title="One frame forward — hold to continue (→)"
+          style={btnStyle}
+        >|▶</button>
 
-      {/* Info row */}
-      <div style={{ marginTop: 8, fontSize: 13, color: '#555', display: 'flex', flexWrap: 'wrap', gap: 16 }}>
-        <span>Time: {fmtTime(currentTime)} / {fmtTime(duration)}</span>
-        <span>Frame: {frameIndex} / {totalFrames}</span>
-        <span>Detections this frame: <strong>{detCount}</strong></span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={showCourt}
-            onChange={(e) => setShowCourt(e.target.checked)}
-          />
-          Show court outline
+        {/* 2× forward — active while held */}
+        <button
+          onPointerDown={() => setPlaybackState('fast-forward')}
+          onPointerUp={() => setPlaybackState(s => s === 'fast-forward' ? 'stopped' : s)}
+          onPointerLeave={() => setPlaybackState(s => s === 'fast-forward' ? 'stopped' : s)}
+          title="2× fast forward — hold (⇧→)"
+          style={btnStyle}
+        >▶▶</button>
+
+        <div style={{ width: 1, height: 20, background: '#ccc', margin: '0 4px' }} />
+
+        {/* Help toggle */}
+        <button
+          onClick={() => setShowHelp(h => !h)}
+          title="Keyboard shortcuts"
+          style={{ ...btnStyle, fontWeight: 'bold', background: showHelp ? '#ddf' : undefined }}
+        >?</button>
+
+        {/* Court overlay toggle */}
+        <label style={{ marginLeft: 4, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
+          <input type="checkbox" checked={showCourt} onChange={(e) => setShowCourt(e.target.checked)} />
+          Court
         </label>
       </div>
+
+      {/* Status row */}
+      <div style={{ marginTop: 6, fontSize: 13, color: '#555', display: 'flex', gap: 16 }}>
+        <span>{fmtTime(currentTime)} / {fmtTime(duration)}</span>
+        <span>Frame {frameIndex} / {totalFrames}</span>
+        <span>Detections: <strong>{detCount}</strong></span>
+      </div>
+
+      {/* Help panel */}
+      {showHelp && (
+        <div style={{
+          marginTop: 8, padding: '10px 14px',
+          background: '#f8f8f8', border: '1px solid #ddd', borderRadius: 4,
+          fontSize: 13, lineHeight: 2,
+        }}>
+          <strong>Keyboard shortcuts</strong>
+          <table style={{ borderCollapse: 'collapse', marginTop: 4 }}>
+            <tbody>
+              {([
+                ['Space', 'Play / Pause'],
+                ['→', 'Advance one frame (hold to continue)'],
+                ['←', 'Reverse one frame (hold to continue)'],
+                ['⇧→', '2× fast forward (hold)'],
+                ['⇧←', '2× fast reverse (hold)'],
+              ] as const).map(([key, desc]) => (
+                <tr key={key}>
+                  <td style={{ paddingRight: 20, fontFamily: 'monospace', fontWeight: 'bold', color: '#333' }}>{key}</td>
+                  <td style={{ color: '#555' }}>{desc}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

@@ -59,7 +59,13 @@ export default function ProjectHome() {
   })
 
   const runPass2 = useMutation({
-    mutationFn: () => api.runPass2(projectId!),
+    mutationFn: (opts?: { max_duration_s?: number; resume?: boolean }) =>
+      api.runPass2(projectId!, opts),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+  })
+
+  const cancelPass2 = useMutation({
+    mutationFn: () => api.cancelPass2(projectId!),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
   })
 
@@ -157,46 +163,81 @@ export default function ProjectHome() {
 
         {progress && (pass2?.state === 'running' || pass2?.state === 'queued') && (
           <div style={{ margin: '8px 0' }}>
-            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
-              <div style={{
-                width: `${Math.round(progress.fraction * 100)}%`,
-                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
-              }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <div style={{ flex: 1, background: '#eee', borderRadius: 4, height: 8 }}>
+                <div style={{
+                  width: `${Math.round(progress.fraction * 100)}%`,
+                  background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
+                }} />
+              </div>
+              <button
+                onClick={() => cancelPass2.mutate()}
+                disabled={cancelPass2.isPending}
+                title="Save partial results and stop"
+                style={{ padding: '2px 10px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                ⏸ Pause
+              </button>
             </div>
-            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: '#555' }}>
               {progress.stage} — {Math.round(progress.fraction * 100)}%
             </div>
           </div>
         )}
 
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {pass1?.state === 'accepted' && (pass2?.state === 'not_started' || pass2?.state === 'failed') && (
-            <button
-              onClick={() => runPass2.mutate()}
-              disabled={runPass2.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer' }}
-            >
-              {runPass2.isPending ? 'Queuing…' : 'Run Pass 2'}
-            </button>
+            <>
+              <button
+                onClick={() => runPass2.mutate({ max_duration_s: 30 })}
+                disabled={runPass2.isPending}
+                style={{ padding: '6px 16px', cursor: 'pointer' }}
+              >
+                {runPass2.isPending ? 'Queuing…' : 'Run (30s)'}
+              </button>
+              <button
+                onClick={() => runPass2.mutate({})}
+                disabled={runPass2.isPending}
+                style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#555', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+              >
+                Run (full)
+              </button>
+            </>
           )}
           {pass2?.state === 'waiting_for_user' && (
-            <button
-              onClick={() => navigate(`/projects/${projectId}/pass2`)}
-              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
-            >
-              Review →
-            </button>
+            <>
+              <button
+                onClick={() => navigate(`/projects/${projectId}/pass2`)}
+                style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
+              >
+                Review →
+              </button>
+              <button
+                onClick={() => runPass2.mutate({ max_duration_s: 30, resume: true })}
+                disabled={runPass2.isPending}
+                style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#555', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+              >
+                {runPass2.isPending ? 'Queuing…' : 'Continue (30s)'}
+              </button>
+              <button
+                onClick={() => runPass2.mutate({ resume: true })}
+                disabled={runPass2.isPending}
+                style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#555', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+              >
+                {runPass2.isPending ? 'Queuing…' : 'Continue (full)'}
+              </button>
+            </>
           )}
           {pass2?.state === 'accepted' && (
             <span style={{ color: '#090' }}>✓ Accepted</span>
           )}
           {(pass2?.state === 'waiting_for_user' || pass2?.state === 'accepted') && pass1?.state === 'accepted' && (
             <button
-              onClick={() => runPass2.mutate()}
+              onClick={() => runPass2.mutate({})}
               disabled={runPass2.isPending}
               style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
             >
-              {runPass2.isPending ? 'Queuing…' : 'Re-run'}
+              {runPass2.isPending ? 'Queuing…' : 'Re-run (full)'}
             </button>
           )}
           {pass1?.state !== 'accepted' && (

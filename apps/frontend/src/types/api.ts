@@ -112,4 +112,7 @@ export interface Pass2RawResult {
   threshold: number
   min_area: number
   max_area: number
+  processed_in_time_s: number
+  processed_out_time_s: number
+  stable_out_time_s: number
 }

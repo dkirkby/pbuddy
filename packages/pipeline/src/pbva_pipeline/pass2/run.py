@@ -34,18 +34,51 @@ class Pass2:
 
         # Load pass 1 accepted output.
         p1 = Pass1AcceptedOutput.model_validate(ctx.prior_accepted)
+        stable_in = p1.stable_bounds.in_time_s
+        stable_out = p1.stable_bounds.out_time_s
 
-        # Load the median background plate.
-        bg_path = ctx.paths.project_root / p1.median_background_path
-        if not bg_path.exists():
-            # Fallback: try pass1 raw dir.
-            bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
+        # Load the median background plate from the pass1 raw dir.
+        bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
         bg = cv2.imread(str(bg_path))
         if bg is None:
             raise FileNotFoundError(f"Median background not found: {bg_path}")
 
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
+
+        # Read run config (written by the API before queuing the job).
+        run_config_path = ctx.paths.pass_corrections_dir / "run_config.json"
+        max_duration_s: float | None = None
+        resume: bool = False
+        if run_config_path.exists():
+            cfg = json.loads(run_config_path.read_text())
+            max_duration_s = cfg.get("max_duration_s")
+            resume = bool(cfg.get("resume", False))
+
+        # Determine processing window and load existing detections for resume.
+        process_in_time_s = stable_in
+        existing_frames: dict = {}
+        existing_frame_count = 0
+        existing_detection_count = 0
+        original_in_time_s = stable_in
+
+        if resume:
+            raw_result_path = raw_dir / "result.json"
+            if raw_result_path.exists():
+                prev = Pass2RawResult.model_validate_json(raw_result_path.read_text())
+                if prev.processed_out_time_s > stable_in:
+                    process_in_time_s = prev.processed_out_time_s
+                    original_in_time_s = prev.processed_in_time_s or stable_in
+                    dets_path = raw_dir / "detections.json"
+                    if dets_path.exists():
+                        existing_data = json.loads(dets_path.read_text())
+                        existing_frames = existing_data.get("frames", {})
+                        existing_frame_count = existing_data.get("frame_count", 0)
+                        existing_detection_count = existing_data.get("detection_count", 0)
+
+        process_out_time_s = stable_out
+        if max_duration_s is not None:
+            process_out_time_s = min(stable_out, process_in_time_s + max_duration_s)
 
         progress.update(0.0, "detect_blobs", "Starting blob detection…")
         progress.check_cancelled()
@@ -57,8 +90,8 @@ class Pass2:
         data = detect_blobs(
             video_path=ctx.video_path,
             bg=bg,
-            in_time_s=p1.stable_bounds.in_time_s,
-            out_time_s=p1.stable_bounds.out_time_s,
+            in_time_s=process_in_time_s,
+            out_time_s=process_out_time_s,
             fps=ctx.video_fps,
             threshold=DEFAULT_THRESHOLD,
             min_area=DEFAULT_MIN_AREA,
@@ -68,21 +101,35 @@ class Pass2:
             progress_end=0.95,
         )
 
-        # Write detections.json.
+        # Merge with existing detections from prior runs.
+        merged_frames = {**existing_frames, **data["frames"]}
+        total_frame_count = existing_frame_count + data["frame_count"]
+        total_detection_count = existing_detection_count + data["detection_count"]
+
+        # Write merged detections.json.
         progress.update(0.95, "write_outputs", "Writing detections…")
+        merged_data = {
+            **data,
+            "frames": merged_frames,
+            "frame_count": total_frame_count,
+            "detection_count": total_detection_count,
+        }
         dets_path = raw_dir / "detections.json"
-        dets_path.write_text(json.dumps(data, separators=(",", ":")))
+        dets_path.write_text(json.dumps(merged_data, separators=(",", ":")))
 
         # Write result.json (summary, without the frame data).
         result = Pass2RawResult(
-            frame_count=data["frame_count"],
-            detection_count=data["detection_count"],
+            frame_count=total_frame_count,
+            detection_count=total_detection_count,
             fps=data["fps"],
             bg_width=data["bg_width"],
             bg_height=data["bg_height"],
             threshold=data["threshold"],
             min_area=data["min_area"],
             max_area=data["max_area"],
+            processed_in_time_s=original_in_time_s,
+            processed_out_time_s=data.get("actual_out_time_s", process_out_time_s),
+            stable_out_time_s=stable_out,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
 
@@ -126,5 +173,8 @@ class Pass2:
             threshold=raw_result.threshold,
             min_area=raw_result.min_area,
             max_area=raw_result.max_area,
+            processed_in_time_s=raw_result.processed_in_time_s,
+            processed_out_time_s=raw_result.processed_out_time_s,
+            stable_out_time_s=raw_result.stable_out_time_s,
         )
         return accepted

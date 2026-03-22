@@ -7,7 +7,7 @@ dependencies = [
     "pbva-db",
     "numpy>=1.26",
     "scipy>=1.13",
-    "opencv-python>=4.9",
+    "opencv-python-headless>=4.9",
     "av>=12.0",
     "orjson>=3.10",
 ]

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
 import type { ArtifactRef, CourtGeometry, Detection, DetectionsData } from '../types/api'
@@ -10,6 +10,12 @@ interface Pass1AcceptedOutput {
   bg_width: number
   bg_height: number
   stable_bounds: { in_time_s: number; out_time_s: number }
+}
+
+function fmtTime(s: number): string {
+  const m = Math.floor(s / 60)
+  const sec = Math.round(s % 60)
+  return `${m}m ${sec.toString().padStart(2, '0')}s`
 }
 
 export default function Pass2Page() {
@@ -78,6 +84,16 @@ export default function Pass2Page() {
     return idx
   }, [detectionsData])
 
+  const continuePass2 = useMutation({
+    mutationFn: (opts: { max_duration_s?: number }) =>
+      api.runPass2(projectId!, { ...opts, resume: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      navigate(`/projects/${projectId}`)
+    },
+    onError: (e: any) => setStatusMsg('Error: ' + e.message),
+  })
+
   async function handleAccept() {
     setAccepting(true)
     setStatusMsg(null)
@@ -96,6 +112,11 @@ export default function Pass2Page() {
   const bgWidth = detectionsData?.bg_width ?? resultData?.bg_width ?? 960
   const bgHeight = detectionsData?.bg_height ?? resultData?.bg_height ?? 540
   const totalFrames = resultData?.frame_count ?? 0
+
+  // Partial processing: processed_out_time_s < stable_out_time_s.
+  const processedOut: number = resultData?.processed_out_time_s ?? 0
+  const stableOut: number = resultData?.stable_out_time_s ?? 0
+  const isPartial = stableOut > 0 && processedOut < stableOut - 0.5
 
   const isReady = !!detectionsData && !detectionsLoading
 
@@ -127,11 +148,36 @@ export default function Pass2Page() {
       </div>
 
       {resultData && (
-        <p style={{ color: '#666', fontSize: 13, marginTop: 0, marginBottom: 16 }}>
-          {resultData.frame_count.toLocaleString()} frames processed ·{' '}
-          {resultData.detection_count.toLocaleString()} total detections ·{' '}
-          {bgWidth}×{bgHeight} · threshold {resultData.threshold} · min area {resultData.min_area}px²
-        </p>
+        <div style={{ marginTop: 0, marginBottom: 16 }}>
+          <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
+            {resultData.frame_count.toLocaleString()} frames ·{' '}
+            {resultData.detection_count.toLocaleString()} detections ·{' '}
+            {bgWidth}×{bgHeight} · threshold {resultData.threshold} · min area {resultData.min_area}px²
+            {isPartial && (
+              <span style={{ color: '#f90', marginLeft: 8 }}>
+                ⏸ {fmtTime(processedOut)} / {fmtTime(stableOut)} processed
+              </span>
+            )}
+          </p>
+          {isPartial && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => continuePass2.mutate({ max_duration_s: 30 })}
+                disabled={continuePass2.isPending}
+                style={{ padding: '6px 16px', cursor: 'pointer' }}
+              >
+                {continuePass2.isPending ? 'Queuing…' : 'Continue (30s)'}
+              </button>
+              <button
+                onClick={() => continuePass2.mutate({})}
+                disabled={continuePass2.isPending}
+                style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#555', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+              >
+                {continuePass2.isPending ? 'Queuing…' : 'Continue (full)'}
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {!isReady ? (

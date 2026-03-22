@@ -7,7 +7,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -21,6 +22,11 @@ from pbva_core.types import (
 
 from pbva_db.models import Artifact, Job, Pass, Project
 from pbva_api.dependencies import get_db, get_settings
+
+
+class RunPassBody(PydanticBaseModel):
+    max_duration_s: float | None = None
+    resume: bool = False
 
 router = APIRouter(prefix="/api/projects", tags=["passes"])
 
@@ -59,7 +65,9 @@ def _get_pass_or_404(db: Session, project_id: str, pass_name: str) -> Pass:
 def run_pass(
     project_id: str,
     pass_name: str,
+    body: RunPassBody = Body(default_factory=RunPassBody),
     db: Session = Depends(get_db),
+    settings=Depends(get_settings),
 ):
     project = _get_project_or_404(db, project_id)
     pass_row = _get_pass_or_404(db, project_id, pass_name)
@@ -76,6 +84,14 @@ def run_pass(
             detail=f"Pass {pass_name} cannot be run from state '{pass_row.state}'",
         )
 
+    # Write run_config.json for passes that support it (currently pass2).
+    if pass_name == "pass2":
+        from pbva_core import paths as p
+        corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, pass_name)
+        corrections_dir.mkdir(parents=True, exist_ok=True)
+        run_cfg = {"max_duration_s": body.max_duration_s, "resume": body.resume}
+        (corrections_dir / "run_config.json").write_text(json.dumps(run_cfg))
+
     # Create job.
     job_id = str(uuid.uuid4())
     job = Job(
@@ -89,9 +105,12 @@ def run_pass(
     db.add(job)
 
     # Reset pass state and clear stale artifact pointers.
+    # When resuming, keep the raw artifact ID so the UI can still serve the
+    # previous detections.json while the new run is in progress.
     pass_row.state = PassState.queued.value
     pass_row.current_job_id = job_id
-    pass_row.latest_raw_artifact_id = None
+    if not body.resume:
+        pass_row.latest_raw_artifact_id = None
     pass_row.latest_correction_id = None
     pass_row.latest_accepted_artifact_id = None
     pass_row.updated_at = _utcnow()
@@ -115,6 +134,29 @@ def run_pass(
             queued_at=job.queued_at,
         ).model_dump(mode="json"),
     }
+
+
+@router.post("/{project_id}/passes/{pass_name}/cancel", response_model=dict)
+def cancel_pass(
+    project_id: str,
+    pass_name: str,
+    db: Session = Depends(get_db),
+):
+    pass_row = _get_pass_or_404(db, project_id, pass_name)
+    if pass_row.state not in {PassState.queued.value, PassState.running.value}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass {pass_name} is not running (state: '{pass_row.state}')",
+        )
+    if not pass_row.current_job_id:
+        raise HTTPException(status_code=409, detail="No active job to cancel")
+
+    job = db.get(Job, pass_row.current_job_id)
+    if job and job.status in {"queued", "running"}:
+        job.status = "cancel_requested"
+        db.commit()
+
+    return {"ok": True}
 
 
 @router.get("/{project_id}/passes/{pass_name}", response_model=dict)

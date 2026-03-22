@@ -147,58 +147,70 @@ def detect_blobs(
     duration_s = max(out_time_s - in_time_s, 1.0)
     prev_bgr: np.ndarray | None = None  # previous decoded frame at bg dimensions
 
-    with av.open(str(video_path)) as container:
-        stream = container.streams.video[0]
-        stream.codec_context.skip_frame = "DEFAULT"
+    actual_out_time_s = in_time_s  # updated as frames are processed
 
-        # Seek to near the stable in point to avoid decoding the pre-stable portion.
-        if in_time_s > 1.0:
-            container.seek(int(in_time_s * 1_000_000))
+    try:
+        with av.open(str(video_path)) as container:
+            stream = container.streams.video[0]
+            stream.codec_context.skip_frame = "DEFAULT"
 
-        done = False
-        for packet in container.demux(stream):
-            for frame in packet.decode():
-                pts = frame.pts if frame.pts is not None else frame.dts
-                if pts is None:
-                    continue
-                ts = float(pts * stream.time_base)
+            # Seek to near the stable in point to avoid decoding the pre-stable portion.
+            if in_time_s > 1.0:
+                container.seek(int(in_time_s * 1_000_000))
 
-                # Skip frames before stable bounds (seek may land on a keyframe earlier).
-                if ts < in_time_s - 0.5:
-                    continue
-                # Stop after stable bounds.
-                if ts > out_time_s + 0.5:
-                    done = True
+            done = False
+            for packet in container.demux(stream):
+                for frame in packet.decode():
+                    pts = frame.pts if frame.pts is not None else frame.dts
+                    if pts is None:
+                        continue
+                    ts = float(pts * stream.time_base)
+
+                    # Skip frames before stable bounds (seek may land on a keyframe earlier).
+                    if ts < in_time_s - 0.5:
+                        continue
+                    # Stop after stable bounds.
+                    if ts > out_time_s + 0.5:
+                        done = True
+                        break
+
+                    frame_index = round(ts * fps)
+                    frame_count += 1
+                    actual_out_time_s = ts
+
+                    if progress_callback is not None and frame_count % 300 == 0:
+                        elapsed = ts - in_time_s
+                        frac = progress_start + (progress_end - progress_start) * min(
+                            elapsed / duration_s, 1.0
+                        )
+                        progress_callback(frac, f"Frame {frame_index} ({ts:.0f}s)")
+
+                    # Decode and resize to bg dimensions once; reuse as prev_frame next iteration.
+                    bgr = frame.to_ndarray(format="bgr24")
+                    h, w = bgr.shape[:2]
+                    if w != bg_w or h != bg_h:
+                        bgr = cv2.resize(bgr, (bg_w, bg_h), interpolation=cv2.INTER_AREA)
+
+                    dets = _process_frame(
+                        bgr, bg, threshold, min_area, max_area, open_kernel, close_kernel,
+                        prev_frame=prev_bgr,
+                    )
+                    prev_bgr = bgr
+
+                    if dets:
+                        frames[str(frame_index)] = dets
+                        detection_count += len(dets)
+
+                if done:
                     break
 
-                frame_index = round(ts * fps)
-                frame_count += 1
-
-                if progress_callback is not None and frame_count % 300 == 0:
-                    elapsed = ts - in_time_s
-                    frac = progress_start + (progress_end - progress_start) * min(
-                        elapsed / duration_s, 1.0
-                    )
-                    progress_callback(frac, f"Frame {frame_index} ({ts:.0f}s)")
-
-                # Decode and resize to bg dimensions once; reuse as prev_frame next iteration.
-                bgr = frame.to_ndarray(format="bgr24")
-                h, w = bgr.shape[:2]
-                if w != bg_w or h != bg_h:
-                    bgr = cv2.resize(bgr, (bg_w, bg_h), interpolation=cv2.INTER_AREA)
-
-                dets = _process_frame(
-                    bgr, bg, threshold, min_area, max_area, open_kernel, close_kernel,
-                    prev_frame=prev_bgr,
-                )
-                prev_bgr = bgr
-
-                if dets:
-                    frames[str(frame_index)] = dets
-                    detection_count += len(dets)
-
-            if done:
-                break
+    except Exception as exc:
+        # Import lazily to avoid a hard dependency on pbva_core in tests.
+        from pbva_core.errors import WorkerCancelled
+        if not isinstance(exc, WorkerCancelled):
+            raise
+        # Cancelled mid-run: fall through and return whatever was collected so far.
+        # actual_out_time_s reflects the last frame processed before cancellation.
 
     return {
         "fps": round(fps, 6),
@@ -209,5 +221,6 @@ def detect_blobs(
         "threshold": threshold,
         "min_area": min_area,
         "max_area": max_area,
+        "actual_out_time_s": actual_out_time_s,
         "frames": frames,
     }

@@ -138,6 +138,10 @@ class Pass2RawResult(BaseModel):
     threshold: int
     min_area: int
     max_area: int
+    # Time bounds of the processing window (default 0.0 for backward compatibility).
+    processed_in_time_s: float = 0.0
+    processed_out_time_s: float = 0.0
+    stable_out_time_s: float = 0.0
 
 
 class Pass2CorrectionPayload(BaseModel):
@@ -153,3 +157,6 @@ class Pass2AcceptedOutput(BaseModel):
     threshold: int
     min_area: int
     max_area: int
+    processed_in_time_s: float = 0.0
+    processed_out_time_s: float = 0.0
+    stable_out_time_s: float = 0.0
