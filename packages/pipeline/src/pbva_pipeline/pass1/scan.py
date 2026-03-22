@@ -112,7 +112,7 @@ def scan_video(
                 small = gray[::max(1, h // 180), ::max(1, w // 320)]
 
                 if prev_small is not None and prev_small.shape == small.shape:
-                    diff = float(np.mean(np.abs(
+                    diff = float(np.median(np.abs(
                         small.astype(np.float32) - prev_small.astype(np.float32)
                     )))
                     diff_buffer.append(diff)
