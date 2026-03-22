@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 # Default parameters.
-DEFAULT_THRESHOLD = 30
+DEFAULT_THRESHOLD = 20
 DEFAULT_MIN_AREA = 50         # px² — small enough to catch a ~8px-radius ball at 1080p
 DEFAULT_MAX_AREA = 160_000    # px²
 
