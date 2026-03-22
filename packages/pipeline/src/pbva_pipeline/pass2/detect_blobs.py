@@ -26,9 +26,16 @@ def _process_frame(
     max_area: int,
     open_kernel: np.ndarray,
     close_kernel: np.ndarray,
+    prev_frame: np.ndarray | None = None,
 ) -> list[dict]:
-    """Detect foreground blobs in one frame via background subtraction.
+    """Detect foreground blobs in one frame.
 
+    Combines background subtraction (|frame - bg|) with temporal differencing
+    (|frame - prev_frame|) via OR, so that objects baked into the median
+    background (e.g. a ball sitting at a position many times) are still
+    detected when they move between consecutive frames.
+
+    prev_frame must be at the same dimensions as bg if provided.
     Returns a list of detection dicts. Can be called without video I/O for testing.
     """
     bg_h, bg_w = bg.shape[:2]
@@ -36,10 +43,20 @@ def _process_frame(
     if w != bg_w or h != bg_h:
         frame_bgr = cv2.resize(frame_bgr, (bg_w, bg_h), interpolation=cv2.INTER_AREA)
 
-    # Background subtraction → grayscale diff → binary mask.
-    diff = cv2.absdiff(frame_bgr, bg)
-    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+    # Background subtraction mask.
+    diff_bg = cv2.absdiff(frame_bgr, bg)
+    gray_bg = cv2.cvtColor(diff_bg, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray_bg, threshold, 255, cv2.THRESH_BINARY)
+
+    # Temporal diff mask: OR with background mask to catch objects whose
+    # appearance is captured in the median background plate.
+    # Cloud motion between consecutive frames is small (≪ motion vs median),
+    # so this also reduces spurious sky detections.
+    if prev_frame is not None:
+        diff_temp = cv2.absdiff(frame_bgr, prev_frame)
+        gray_temp = cv2.cvtColor(diff_temp, cv2.COLOR_BGR2GRAY)
+        _, mask_temp = cv2.threshold(gray_temp, threshold, 255, cv2.THRESH_BINARY)
+        mask = cv2.bitwise_or(mask, mask_temp)
 
     # Morphological cleanup.
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, open_kernel, iterations=1)
@@ -128,6 +145,7 @@ def detect_blobs(
     frame_count = 0
     detection_count = 0
     duration_s = max(out_time_s - in_time_s, 1.0)
+    prev_bgr: np.ndarray | None = None  # previous decoded frame at bg dimensions
 
     with av.open(str(video_path)) as container:
         stream = container.streams.video[0]
@@ -163,10 +181,17 @@ def detect_blobs(
                     )
                     progress_callback(frac, f"Frame {frame_index} ({ts:.0f}s)")
 
+                # Decode and resize to bg dimensions once; reuse as prev_frame next iteration.
                 bgr = frame.to_ndarray(format="bgr24")
+                h, w = bgr.shape[:2]
+                if w != bg_w or h != bg_h:
+                    bgr = cv2.resize(bgr, (bg_w, bg_h), interpolation=cv2.INTER_AREA)
+
                 dets = _process_frame(
-                    bgr, bg, threshold, min_area, max_area, open_kernel, close_kernel
+                    bgr, bg, threshold, min_area, max_area, open_kernel, close_kernel,
+                    prev_frame=prev_bgr,
                 )
+                prev_bgr = bgr
 
                 if dets:
                     frames[str(frame_index)] = dets

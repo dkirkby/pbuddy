@@ -91,6 +91,36 @@ def test_frame_resized_to_bg():
     assert abs(dets[0]["cy"] - 270) < 10
 
 
+def test_temporal_diff_catches_ball_in_background():
+    """Ball coinciding with the median background is caught via temporal diff."""
+    # Background already contains a ball at position A.
+    bg = np.zeros((540, 960, 3), dtype=np.uint8)
+    cv2.circle(bg, (480, 270), 22, (200, 200, 200), -1)
+
+    # Current frame: ball still at position A (identical to background there).
+    frame = bg.copy()
+
+    # Previous frame: ball was 50px to the left.
+    prev_frame = np.zeros((540, 960, 3), dtype=np.uint8)
+    cv2.circle(prev_frame, (430, 270), 22, (200, 200, 200), -1)
+
+    open_k, close_k = _kernels()
+
+    # Without temporal diff: background sub sees no diff → no detection.
+    dets_no_temp = _process_frame(
+        frame, bg, threshold=20, min_area=50, max_area=160_000,
+        open_kernel=open_k, close_kernel=close_k, prev_frame=None,
+    )
+    assert dets_no_temp == [], f"Expected no detections without temporal diff, got {dets_no_temp}"
+
+    # With temporal diff: frame vs prev_frame shows both positions → detects ball.
+    dets_with_temp = _process_frame(
+        frame, bg, threshold=20, min_area=50, max_area=160_000,
+        open_kernel=open_k, close_kernel=close_k, prev_frame=prev_frame,
+    )
+    assert len(dets_with_temp) >= 1, "Expected at least one detection with temporal diff"
+
+
 def test_multiple_blobs():
     """Two separate blobs are detected independently."""
     bg = np.zeros((540, 960, 3), dtype=np.uint8)
