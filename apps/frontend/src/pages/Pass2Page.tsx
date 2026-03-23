@@ -21,6 +21,7 @@ export default function Pass2Page() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const playerRef = useRef<VideoPlayerHandle>(null)
+  const previewRef = useRef<HTMLCanvasElement>(null)
 
   const [annotations, setAnnotations] = useState<Record<string, BallAnnotation>>({})
   const [patches, setPatches] = useState<Record<string, string>>({})
@@ -223,15 +224,30 @@ export default function Pass2Page() {
           onVideoClick={handleVideoClick}
           ballCount={ballCount}
           storageKey={`pass2-pos-${projectId}`}
+          previewCanvasRef={previewRef}
         />
       )}
 
-      {/* Ball patch gallery — most recent on the left */}
-      {patchOrder.length > 0 && (
+      {/* Ball patch gallery — live preview slot always first, annotations to the right */}
+      {resultData && (
         <div style={{
           marginTop: 12, overflowX: 'auto', display: 'flex', gap: 4,
-          padding: '4px', background: '#111', borderRadius: 4,
+          padding: '4px', background: '#111', borderRadius: 4, alignItems: 'flex-start',
         }}>
+          {/* Live preview canvas — updated by VideoPlayer rAF loop on mouse move */}
+          <canvas
+            ref={previewRef}
+            width={PATCH_RADIUS * 2}
+            height={PATCH_RADIUS * 2}
+            style={{
+              flexShrink: 0, display: 'block',
+              width: PATCH_DISPLAY_SIZE, height: PATCH_DISPLAY_SIZE,
+              imageRendering: 'pixelated',
+            }}
+          />
+          {patchOrder.length > 0 && (
+            <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
+          )}
           {patchOrder.filter((fi) => patches[fi]).map((fi) => (
             <div
               key={fi}
@@ -269,5 +285,6 @@ export default function Pass2Page() {
         </div>
       )}
     </div>
+  )
   )
 }
