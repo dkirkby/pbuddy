@@ -286,5 +286,4 @@ export default function Pass2Page() {
       )}
     </div>
   )
-  )
 }
