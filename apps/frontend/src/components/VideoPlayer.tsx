@@ -315,6 +315,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   function startStepping(delta: number) {
     const video = videoRef.current
     if (!video) return
+    // Cancel any timers from a previous call (key-repeat fires faster than the
+    // 300 ms timeout, so each repeat resets the countdown — only a button hold
+    // ever lets the interval actually start).
+    stopStepping()
     // Immediately stop any forward/reverse playback.
     if (playbackStateRef.current !== 'stopped') {
       video.pause()
@@ -357,7 +361,6 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         if (e.shiftKey) {
           if (!e.repeat && playbackStateRef.current !== 'fast-forward') setPlaybackState('fast-forward')
         } else {
-          // Allow browser key-repeat to give continuous stepping.
           startStepping(1)
         }
         return
