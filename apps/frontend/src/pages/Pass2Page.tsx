@@ -248,6 +248,17 @@ export default function Pass2Page() {
                   imageRendering: 'pixelated',
                 }}
               />
+              {/* Centering crosshair */}
+              <div style={{
+                position: 'absolute', top: '50%', left: 0, right: 0,
+                height: 2, background: 'rgba(0,220,255,0.45)',
+                transform: 'translateY(-50%)', pointerEvents: 'none',
+              }} />
+              <div style={{
+                position: 'absolute', left: '50%', top: 0, bottom: 0,
+                width: 2, background: 'rgba(0,220,255,0.45)',
+                transform: 'translateX(-50%)', pointerEvents: 'none',
+              }} />
               <span style={{
                 position: 'absolute', bottom: 2, left: 0, right: 0,
                 textAlign: 'center', fontSize: 10, color: '#fff',

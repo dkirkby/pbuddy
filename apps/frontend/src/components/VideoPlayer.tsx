@@ -152,10 +152,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       ctx.stroke()
     }
 
-    // Draw ball annotation crosses (current frame full opacity, ±5 frames faded).
+    // Draw ball annotation circles (current frame full opacity, ±5 frames faded).
     if (annotations) {
-      const ARM = 10
-      ctx.lineWidth = 2
+      const R = 10
+      ctx.lineWidth = 1.5
       for (const [fi, ann] of Object.entries(annotations)) {
         const dist = Math.abs(parseInt(fi, 10) - frameIndex)
         if (dist > 5) continue
@@ -164,8 +164,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         const cx = ann.x * sx
         const cy = ann.y * sy
         ctx.beginPath()
-        ctx.moveTo(cx - ARM, cy); ctx.lineTo(cx + ARM, cy)
-        ctx.moveTo(cx, cy - ARM); ctx.lineTo(cx, cy + ARM)
+        ctx.arc(cx, cy, R, 0, 2 * Math.PI)
         ctx.stroke()
       }
     }
