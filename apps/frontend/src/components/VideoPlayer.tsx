@@ -10,6 +10,7 @@
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { CourtGeometry } from '../types/api'
+import { computeVolumeOverlay } from '../lib/courtCamera'
 
 interface Detection {
   cx: number; cy: number; a: number; b: number; angle: number
@@ -233,6 +234,31 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         ctx.beginPath()
         ctx.moveTo(x0 * sx, y0 * sy)
         ctx.lineTo(x1 * sx, y1 * sy)
+        ctx.stroke()
+      }
+
+      const vol = computeVolumeOverlay(courtGeometry, bgWidth, bgHeight)
+
+      // Volume edges — magenta, full opacity for debugging
+      ctx.strokeStyle = 'rgba(255, 0, 255, 1.0)'
+      ctx.lineWidth = 1.5
+      for (const [x0, y0, x1, y1] of vol.edges) {
+        ctx.beginPath()
+        ctx.moveTo(x0 * sx, y0 * sy)
+        ctx.lineTo(x1 * sx, y1 * sy)
+        ctx.stroke()
+      }
+
+      // Silhouette polygon — red outline
+      if (vol.silhouette.length >= 2) {
+        ctx.strokeStyle = 'rgba(255, 50, 50, 0.85)'
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.moveTo(vol.silhouette[0][0] * sx, vol.silhouette[0][1] * sy)
+        for (let i = 1; i < vol.silhouette.length; i++) {
+          ctx.lineTo(vol.silhouette[i][0] * sx, vol.silhouette[i][1] * sy)
+        }
+        ctx.closePath()
         ctx.stroke()
       }
     }
