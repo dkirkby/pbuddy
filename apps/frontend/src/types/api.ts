@@ -78,41 +78,17 @@ export interface WsEvent {
   payload: Record<string, unknown>
 }
 
-export interface Detection {
-  cx: number
-  cy: number
-  a: number
-  b: number
-  angle: number
-  area: number
-  bbox_x: number
-  bbox_y: number
-  bbox_w: number
-  bbox_h: number
+export interface BallAnnotation {
+  x: number
+  y: number
 }
 
-export interface DetectionsData {
-  fps: number
-  bg_width: number
-  bg_height: number
-  frame_count: number
-  detection_count: number
-  threshold: number
-  min_area: number
-  max_area: number
-  frames: Record<string, Detection[]>
+export interface Pass2Corrections {
+  annotations: Record<string, BallAnnotation>
 }
 
 export interface Pass2RawResult {
-  frame_count: number
-  detection_count: number
   fps: number
   bg_width: number
   bg_height: number
-  threshold: number
-  min_area: number
-  max_area: number
-  processed_in_time_s: number
-  processed_out_time_s: number
-  stable_out_time_s: number
 }

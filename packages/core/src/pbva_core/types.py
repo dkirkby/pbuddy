@@ -129,34 +129,24 @@ class Pass1AcceptedOutput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class BallAnnotation(BaseModel):
+    x: float   # ball centre x in bg-plate pixel space
+    y: float   # ball centre y in bg-plate pixel space
+
+
 class Pass2RawResult(BaseModel):
-    frame_count: int
-    detection_count: int
     fps: float
     bg_width: int
     bg_height: int
-    threshold: int
-    min_area: int
-    max_area: int
-    # Time bounds of the processing window (default 0.0 for backward compatibility).
-    processed_in_time_s: float = 0.0
-    processed_out_time_s: float = 0.0
-    stable_out_time_s: float = 0.0
 
 
 class Pass2CorrectionPayload(BaseModel):
-    pass  # No corrections in Milestone 2
+    # frame_index (as string) -> ball centre in bg-plate pixel space
+    annotations: dict[str, BallAnnotation] = {}
 
 
 class Pass2AcceptedOutput(BaseModel):
-    frame_count: int
-    detection_count: int
     fps: float
     bg_width: int
     bg_height: int
-    threshold: int
-    min_area: int
-    max_area: int
-    processed_in_time_s: float = 0.0
-    processed_out_time_s: float = 0.0
-    stable_out_time_s: float = 0.0
+    annotation_count: int

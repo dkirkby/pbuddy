@@ -1,8 +1,9 @@
 import type {
   ArtifactRef,
-  DetectionsData,
+  BallAnnotation,
   JobSummary,
   Pass1CorrectionPayload,
+  Pass2Corrections,
   ProjectDetail,
   ProjectSummary,
 } from '../types/api'
@@ -67,20 +68,17 @@ export const api = {
   acceptPass1: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass1/accept`),
 
-  runPass2: (projectId: string, opts?: { max_duration_s?: number; resume?: boolean }) =>
-    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass2/run`, opts ?? {}),
+  runPass2: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass2/run`),
 
   getPass2Artifacts: (projectId: string) =>
     get<{ ok: boolean; data: ArtifactRef[] }>(`/api/projects/${projectId}/passes/pass2/artifacts`),
 
-  getDetections: async (artifactId: string): Promise<DetectionsData> => {
-    const res = await fetch(`/api/artifacts/${artifactId}`)
-    if (!res.ok) throw new Error(`Failed to fetch detections: ${res.status}`)
-    return res.json()
-  },
+  getPass2Corrections: (projectId: string) =>
+    get<{ ok: boolean; data: Pass2Corrections }>(`/api/projects/${projectId}/passes/pass2/corrections`),
 
-  cancelPass2: (projectId: string) =>
-    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/cancel`),
+  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations }),
 
   acceptPass2: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),

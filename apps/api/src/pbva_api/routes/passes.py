@@ -7,8 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, HTTPException
-from pydantic import BaseModel as PydanticBaseModel
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -23,10 +22,6 @@ from pbva_core.types import (
 from pbva_db.models import Artifact, Job, Pass, Project
 from pbva_api.dependencies import get_db, get_settings
 
-
-class RunPassBody(PydanticBaseModel):
-    max_duration_s: float | None = None
-    resume: bool = False
 
 router = APIRouter(prefix="/api/projects", tags=["passes"])
 
@@ -65,9 +60,7 @@ def _get_pass_or_404(db: Session, project_id: str, pass_name: str) -> Pass:
 def run_pass(
     project_id: str,
     pass_name: str,
-    body: RunPassBody = Body(default_factory=RunPassBody),
     db: Session = Depends(get_db),
-    settings=Depends(get_settings),
 ):
     project = _get_project_or_404(db, project_id)
     pass_row = _get_pass_or_404(db, project_id, pass_name)
@@ -84,14 +77,6 @@ def run_pass(
             detail=f"Pass {pass_name} cannot be run from state '{pass_row.state}'",
         )
 
-    # Write run_config.json for passes that support it (currently pass2).
-    if pass_name == "pass2":
-        from pbva_core import paths as p
-        corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, pass_name)
-        corrections_dir.mkdir(parents=True, exist_ok=True)
-        run_cfg = {"max_duration_s": body.max_duration_s, "resume": body.resume}
-        (corrections_dir / "run_config.json").write_text(json.dumps(run_cfg))
-
     # Create job.
     job_id = str(uuid.uuid4())
     job = Job(
@@ -105,12 +90,9 @@ def run_pass(
     db.add(job)
 
     # Reset pass state and clear stale artifact pointers.
-    # When resuming, keep the raw artifact ID so the UI can still serve the
-    # previous detections.json while the new run is in progress.
     pass_row.state = PassState.queued.value
     pass_row.current_job_id = job_id
-    if not body.resume:
-        pass_row.latest_raw_artifact_id = None
+    pass_row.latest_raw_artifact_id = None
     pass_row.latest_correction_id = None
     pass_row.latest_accepted_artifact_id = None
     pass_row.updated_at = _utcnow()
@@ -134,29 +116,6 @@ def run_pass(
             queued_at=job.queued_at,
         ).model_dump(mode="json"),
     }
-
-
-@router.post("/{project_id}/passes/{pass_name}/cancel", response_model=dict)
-def cancel_pass(
-    project_id: str,
-    pass_name: str,
-    db: Session = Depends(get_db),
-):
-    pass_row = _get_pass_or_404(db, project_id, pass_name)
-    if pass_row.state not in {PassState.queued.value, PassState.running.value}:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Pass {pass_name} is not running (state: '{pass_row.state}')",
-        )
-    if not pass_row.current_job_id:
-        raise HTTPException(status_code=409, detail="No active job to cancel")
-
-    job = db.get(Job, pass_row.current_job_id)
-    if job and job.status in {"queued", "running"}:
-        job.status = "cancel_requested"
-        db.commit()
-
-    return {"ok": True}
 
 
 @router.get("/{project_id}/passes/{pass_name}", response_model=dict)
@@ -356,14 +315,66 @@ def accept_pass1(
     return {"ok": True, "data": accepted.model_dump(mode="json")}
 
 
+@router.get("/{project_id}/passes/pass2/corrections")
+def get_pass2_corrections(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    ann_path = p.pass_corrections_dir(settings.data_root, project_id, "pass2") / "annotations.json"
+    if not ann_path.exists():
+        return {"ok": True, "data": {"annotations": {}}}
+    return {"ok": True, "data": json.loads(ann_path.read_text())}
+
+
+@router.put("/{project_id}/passes/pass2/corrections")
+def save_pass2_corrections(
+    project_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass2")
+    if pass_row.state != PassState.waiting_for_user.value:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass 2 is in state '{pass_row.state}', not waiting_for_user",
+        )
+
+    from pbva_pipeline.pass2.run import Pass2
+    corrections = Pass2().validate_corrections(body)
+
+    from pbva_core import paths as p
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
+    corrections_dir.mkdir(parents=True, exist_ok=True)
+    ann_data = {k: {"x": v.x, "y": v.y} for k, v in corrections.annotations.items()}
+    ann_path = corrections_dir / "annotations.json"
+    ann_path.write_text(json.dumps({"annotations": ann_data}, indent=2))
+
+    # Register correction artifact.
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass2",
+        artifact_role=ArtifactRole.correction.value,
+        artifact_type="json",
+        path=str(ann_path),
+    ))
+    pass_row.latest_correction_id = art_id
+    pass_row.updated_at = _utcnow()
+    db.commit()
+
+    return {"ok": True}
+
+
 @router.post("/{project_id}/passes/pass2/accept")
 def accept_pass2(
     project_id: str,
     db: Session = Depends(get_db),
     settings=Depends(get_settings),
 ):
-    import shutil
-
     pass_row = _get_pass_or_404(db, project_id, "pass2")
     if pass_row.state != PassState.waiting_for_user.value:
         raise HTTPException(
@@ -374,16 +385,53 @@ def accept_pass2(
     from pbva_core import paths as p
 
     raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass2")
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
     accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass2")
     accepted_dir.mkdir(parents=True, exist_ok=True)
 
-    for filename in ("result.json", "detections.json"):
-        src = raw_dir / filename
-        if not src.exists():
-            raise HTTPException(status_code=500, detail=f"Raw {filename} not found")
-        shutil.copy2(src, accepted_dir / filename)
+    # Load raw result for metadata.
+    raw_result_path = raw_dir / "result.json"
+    if not raw_result_path.exists():
+        raise HTTPException(status_code=500, detail="Raw result.json not found")
+    from pbva_core.types import Pass2RawResult, Pass2CorrectionPayload
+    raw_result = Pass2RawResult.model_validate_json(raw_result_path.read_text())
 
-    # Register accepted result.json artifact.
+    # Load corrections (annotations).
+    corrections = None
+    ann_path = corrections_dir / "annotations.json"
+    if ann_path.exists():
+        corrections = Pass2CorrectionPayload.model_validate_json(ann_path.read_text())
+
+    # Build accepted output via the pass implementation.
+    from pbva_pipeline.pass2.run import Pass2
+    from pbva_pipeline.base import NullProgress, PassPaths, PassContext
+    from pbva_core.config import Settings as CoreSettings
+
+    project = db.get(Project, project_id)
+    pass_paths = PassPaths(
+        project_root=p.project_root(settings.data_root, project_id),
+        uploads_dir=p.uploads_dir(settings.data_root, project_id),
+        derived_dir=p.derived_dir(settings.data_root, project_id),
+        pass_raw_dir=raw_dir,
+        pass_corrections_dir=corrections_dir,
+        pass_accepted_dir=accepted_dir,
+    )
+    ctx = PassContext(
+        project_id=project_id,
+        project_name=project.name,
+        video_path=p.project_root(settings.data_root, project_id) / "uploads" / "original.mp4",
+        video_duration_s=project.video_duration_s or 0.0,
+        video_fps=project.video_fps or 30.0,
+        video_width=project.video_width or 1920,
+        video_height=project.video_height or 1080,
+        paths=pass_paths,
+        settings=settings,
+        job_id=pass_row.current_job_id or "",
+        progress=NullProgress(),
+    )
+    accepted = Pass2().build_accepted_output(ctx, raw_result, corrections)
+
+    # Register accepted artifacts.
     art_id = str(uuid.uuid4())
     db.add(Artifact(
         id=art_id,
@@ -393,23 +441,19 @@ def accept_pass2(
         artifact_type="json",
         path=str(accepted_dir / "result.json"),
     ))
-
-    # Register accepted detections.json artifact.
-    dets_art_id = str(uuid.uuid4())
     db.add(Artifact(
-        id=dets_art_id,
+        id=str(uuid.uuid4()),
         project_id=project_id,
         pass_name="pass2",
         artifact_role=ArtifactRole.accepted.value,
         artifact_type="json",
-        path=str(accepted_dir / "detections.json"),
+        path=str(accepted_dir / "annotations.json"),
     ))
 
     pass_row.state = PassState.accepted.value
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
-    project = db.get(Project, project_id)
     project.status = ProjectStatus.pass2_accepted.value
     project.updated_at = _utcnow()
 
@@ -421,4 +465,4 @@ def accept_pass2(
     ))
     db.commit()
 
-    return {"ok": True}
+    return {"ok": True, "data": accepted.model_dump(mode="json")}

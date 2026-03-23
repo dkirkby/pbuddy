@@ -9,7 +9,12 @@
  * ⏮        rewind to the beginning
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CourtGeometry, Detection } from '../types/api'
+import type { CourtGeometry } from '../types/api'
+
+interface Detection {
+  cx: number; cy: number; a: number; b: number; angle: number
+  area: number; bbox_x: number; bbox_y: number; bbox_w: number; bbox_h: number
+}
 
 // ─── Court geometry helpers ──────────────────────────────────────────────────
 
@@ -50,20 +55,30 @@ function fmtTime(s: number): string {
 
 type PlaybackState = 'stopped' | 'playing' | 'fast-forward' | 'fast-reverse'
 
+interface BallAnnotation {
+  x: number
+  y: number
+}
+
 interface Props {
   videoUrl: string
   fps: number
   bgWidth: number
   bgHeight: number
-  detections: Record<number, Detection[]>
+  detections?: Record<number, Detection[]>
   courtGeometry?: CourtGeometry
   totalFrames: number
+  annotations?: Record<number, BallAnnotation>
+  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean) => void
+  ballCount?: number
+  storageKey?: string
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, courtGeometry, totalFrames,
+  annotations, onVideoClick, ballCount, storageKey,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -105,13 +120,14 @@ export function VideoPlayer({
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const frameIndex = Math.round(video.currentTime * fps)
-    const dets = detections[frameIndex] ?? []
+    const dets = detections ? (detections[frameIndex] ?? []) : []
     setCurrentTime(video.currentTime)
     setDetCount(dets.length)
 
     const sx = canvas.width / bgWidth
     const sy = canvas.height / bgHeight
 
+    // Draw detection ellipses.
     ctx.strokeStyle = 'rgba(255, 120, 0, 0.85)'
     ctx.lineWidth = 2
     for (const det of dets) {
@@ -122,6 +138,24 @@ export function VideoPlayer({
         (det.angle * Math.PI) / 180, 0, 2 * Math.PI,
       )
       ctx.stroke()
+    }
+
+    // Draw ball annotation crosses (current frame full opacity, ±5 frames faded).
+    if (annotations) {
+      const ARM = 10
+      ctx.lineWidth = 2
+      for (const [fi, ann] of Object.entries(annotations)) {
+        const dist = Math.abs(parseInt(fi, 10) - frameIndex)
+        if (dist > 5) continue
+        const opacity = dist === 0 ? 1.0 : 0.3
+        ctx.strokeStyle = `rgba(0, 220, 255, ${opacity})`
+        const cx = ann.x * sx
+        const cy = ann.y * sy
+        ctx.beginPath()
+        ctx.moveTo(cx - ARM, cy); ctx.lineTo(cx + ARM, cy)
+        ctx.moveTo(cx, cy - ARM); ctx.lineTo(cx, cy + ARM)
+        ctx.stroke()
+      }
     }
 
     if (showCourt && courtGeometry) {
@@ -138,7 +172,20 @@ export function VideoPlayer({
         ctx.stroke()
       }
     }
-  }, [fps, bgWidth, bgHeight, detections, showCourt, courtGeometry])
+  }, [fps, bgWidth, bgHeight, detections, showCourt, courtGeometry, annotations])
+
+  // Redraw whenever annotations or other overlay state changes (e.g. right after a click).
+  useEffect(() => { drawOverlay() }, [drawOverlay])
+
+  // Save position to sessionStorage on every seek so StrictMode's effect cleanup
+  // (which runs with currentTime=0) never overwrites a valid stored position.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !storageKey) return
+    const save = () => sessionStorage.setItem(storageKey, String(video.currentTime))
+    video.addEventListener('seeked', save)
+    return () => video.removeEventListener('seeked', save)
+  }, [storageKey])
 
   // ── seeked: redraw canvas; also drives the fast-reverse seek loop ───────────
 
@@ -347,6 +394,19 @@ export function VideoPlayer({
 
   const frameIndex = Math.round(currentTime * fps)
 
+  // ── Video click → annotation callback ──────────────────────────────────────
+
+  function handleContainerClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!onVideoClick) return
+    const video = videoRef.current
+    if (!video) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const bgX = (e.clientX - rect.left) / video.clientWidth * bgWidth
+    const bgY = (e.clientY - rect.top) / video.clientHeight * bgHeight
+    const fi = Math.round(video.currentTime * fpsRef.current)
+    onVideoClick(fi, bgX, bgY, e.shiftKey)
+  }
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   const btnStyle: React.CSSProperties = { padding: '4px 10px', fontSize: 15, cursor: 'pointer', userSelect: 'none' }
@@ -354,12 +414,27 @@ export function VideoPlayer({
   return (
     <div>
       {/* Video + canvas overlay */}
-      <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
+      <div
+        style={{
+          position: 'relative', display: 'inline-block', maxWidth: '100%',
+          cursor: onVideoClick ? 'crosshair' : 'default',
+        }}
+        onClick={handleContainerClick}
+      >
         <video
           ref={videoRef}
           src={videoUrl}
           style={{ display: 'block', maxWidth: '100%', maxHeight: 540 }}
-          onLoadedMetadata={() => { setDuration(videoRef.current?.duration ?? 0); drawOverlay() }}
+          onLoadedMetadata={() => {
+            const v = videoRef.current
+            if (!v) return
+            setDuration(v.duration || 0)
+            if (storageKey) {
+              const saved = parseFloat(sessionStorage.getItem(storageKey) ?? '0')
+              if (saved > 0 && saved < v.duration) v.currentTime = saved
+            }
+            drawOverlay()
+          }}
         />
         <canvas
           ref={canvasRef}
@@ -431,12 +506,19 @@ export function VideoPlayer({
           <input type="checkbox" checked={showCourt} onChange={(e) => setShowCourt(e.target.checked)} />
           Court
         </label>
+
+        {/* Ball annotation count */}
+        {ballCount !== undefined && (
+          <span style={{ marginLeft: 8, fontSize: 13, color: '#555' }}>
+            Balls marked: <strong>{ballCount}</strong>
+          </span>
+        )}
       </div>
 
       {/* Status row */}
       <div style={{ marginTop: 6, fontSize: 13, color: '#555', display: 'flex', gap: 16 }}>
         <span>{fmtTime(currentTime)} / {fmtTime(duration)}</span>
-        <span>Frame {frameIndex} / {totalFrames}</span>
+        <span>Frame {frameIndex} / {totalFrames || Math.round(duration * fps)}</span>
         <span>Detections: <strong>{detCount}</strong></span>
       </div>
 
