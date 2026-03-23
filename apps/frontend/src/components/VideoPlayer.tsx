@@ -53,7 +53,8 @@ function fmtTime(s: number): string {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-const PATCH_RADIUS = 32  // bg-plate pixels; matches dimensions.json ball_specifications.patch_radius_px
+const PATCH_RADIUS = 32        // bg-plate pixels; matches dimensions.json ball_specifications.patch_radius_px
+const PREVIEW_DISPLAY_SIZE = PATCH_RADIUS * 2 * 3  // 192 px — 3× zoom for live preview
 
 // Hollow-circle cursor that mirrors the canvas annotation marker.
 const _cursorSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21">'
@@ -95,6 +96,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null)
+  const mouseRef = useRef<{ x: number; y: number } | null>(null)
 
   useImperativeHandle(ref, () => ({
     seekToFrame: (fi) => {
@@ -108,6 +111,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const [showCourt, setShowCourt] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [detCount, setDetCount] = useState(0)
+  const [mouseOverVideo, setMouseOverVideo] = useState(false)
 
   // Refs so event handlers and intervals see current values without stale closures.
   const playbackStateRef = useRef<PlaybackState>('stopped')
@@ -453,6 +457,65 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     onVideoClick(fi, bgX, bgY, e.shiftKey, patchDataUrl)
   }
 
+  // ── Live patch preview ───────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!mouseOverVideo || !onVideoClick) return
+    const canvas = previewCanvasRef.current
+    if (!canvas) return
+    canvas.style.display = 'block'
+    let rafId: number
+    function tick() {
+      const video = videoRef.current
+      const pos = mouseRef.current
+      if (video && pos) {
+        const ctx = canvas!.getContext('2d')
+        if (ctx) {
+          const bgX = pos.x / video.clientWidth * bgWidth
+          const bgY = pos.y / video.clientHeight * bgHeight
+          const scaleX = video.videoWidth / bgWidth
+          const scaleY = video.videoHeight / bgHeight
+          try {
+            ctx.drawImage(
+              video,
+              (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
+              PATCH_RADIUS * 2 * scaleX, PATCH_RADIUS * 2 * scaleY,
+              0, 0, PREVIEW_DISPLAY_SIZE, PREVIEW_DISPLAY_SIZE,
+            )
+          } catch {
+            ctx.clearRect(0, 0, PREVIEW_DISPLAY_SIZE, PREVIEW_DISPLAY_SIZE)
+          }
+          // Crosshair at centre
+          const mid = PREVIEW_DISPLAY_SIZE / 2
+          ctx.strokeStyle = 'rgba(0, 220, 255, 0.6)'
+          ctx.lineWidth = 1.5
+          ctx.beginPath()
+          ctx.moveTo(mid, 0); ctx.lineTo(mid, PREVIEW_DISPLAY_SIZE)
+          ctx.moveTo(0, mid); ctx.lineTo(PREVIEW_DISPLAY_SIZE, mid)
+          ctx.stroke()
+          // Position near cursor, flipping side at video edges
+          const gap = 14
+          const vw = video.clientWidth
+          const vh = video.clientHeight
+          const left = pos.x + gap + PREVIEW_DISPLAY_SIZE > vw
+            ? pos.x - gap - PREVIEW_DISPLAY_SIZE
+            : pos.x + gap
+          const top = pos.y + gap + PREVIEW_DISPLAY_SIZE > vh
+            ? pos.y - gap - PREVIEW_DISPLAY_SIZE
+            : pos.y + gap
+          canvas!.style.left = `${left}px`
+          canvas!.style.top = `${top}px`
+        }
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(rafId)
+      if (previewCanvasRef.current) previewCanvasRef.current.style.display = 'none'
+    }
+  }, [mouseOverVideo, onVideoClick, bgWidth, bgHeight])
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   const btnStyle: React.CSSProperties = { padding: '4px 10px', fontSize: 15, cursor: 'pointer', userSelect: 'none' }
@@ -466,6 +529,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           cursor: onVideoClick ? CIRCLE_CURSOR : 'default',
         }}
         onClick={handleContainerClick}
+        onMouseMove={onVideoClick ? (e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+        } : undefined}
+        onMouseEnter={onVideoClick ? () => setMouseOverVideo(true) : undefined}
+        onMouseLeave={onVideoClick ? () => { setMouseOverVideo(false); mouseRef.current = null } : undefined}
       >
         <video
           ref={videoRef}
@@ -486,6 +555,19 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           ref={canvasRef}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
         />
+        {onVideoClick && (
+          <canvas
+            ref={previewCanvasRef}
+            width={PREVIEW_DISPLAY_SIZE}
+            height={PREVIEW_DISPLAY_SIZE}
+            style={{
+              position: 'absolute', display: 'none', pointerEvents: 'none',
+              border: '1px solid rgba(0,220,255,0.5)',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+              imageRendering: 'pixelated',
+            }}
+          />
+        )}
       </div>
 
       {/* Playback controls */}
