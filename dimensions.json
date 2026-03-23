@@ -26,7 +26,8 @@
       "min": 22.1,
       "max": 26.5,
       "unit": "grams"
-    }
+    },
+    "patch_radius_px": 32
   },
   "sources": [
     "https://usapickleball.org/what-is-pickleball/official-rules/",

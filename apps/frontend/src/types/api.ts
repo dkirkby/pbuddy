@@ -85,6 +85,7 @@ export interface BallAnnotation {
 
 export interface Pass2Corrections {
   annotations: Record<string, BallAnnotation>
+  patches: Record<string, string>  // frameIndex → PNG data URL
 }
 
 export interface Pass2RawResult {

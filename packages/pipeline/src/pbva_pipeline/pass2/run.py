@@ -62,6 +62,7 @@ class Pass2:
         corrections: Pass2CorrectionPayload | None,
     ) -> Pass2AcceptedOutput:
         import shutil
+        import cv2
 
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
@@ -69,12 +70,41 @@ class Pass2:
         shutil.copy2(ctx.paths.pass_raw_dir / "result.json", accepted_dir / "result.json")
 
         annotations = corrections.annotations if corrections else {}
-
-        # Write annotations to accepted dir.
         ann_data = {k: {"x": v.x, "y": v.y} for k, v in annotations.items()}
         (accepted_dir / "annotations.json").write_text(
             json.dumps({"annotations": ann_data}, indent=2)
         )
+
+        # Copy raw patches and compute background-subtracted patches.
+        raw_src = ctx.paths.pass_corrections_dir / "patches" / "raw"
+        if raw_src.exists() and any(raw_src.glob("*.png")):
+            raw_dst = accepted_dir / "patches" / "raw"
+            bg_sub_dst = accepted_dir / "patches" / "bg_sub"
+            raw_dst.mkdir(parents=True, exist_ok=True)
+            bg_sub_dst.mkdir(parents=True, exist_ok=True)
+
+            bg_plate_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
+            bg_plate = cv2.imread(str(bg_plate_path)) if bg_plate_path.exists() else None
+
+            for src_png in sorted(raw_src.glob("*.png")):
+                shutil.copy2(src_png, raw_dst / src_png.name)
+
+                if bg_plate is None:
+                    continue
+                raw_patch = cv2.imread(str(src_png))
+                if raw_patch is None:
+                    continue
+                h, w = raw_patch.shape[:2]
+                frame_str = str(int(src_png.stem))
+                if frame_str not in ann_data:
+                    continue
+                cx = int(round(ann_data[frame_str]["x"]))
+                cy = int(round(ann_data[frame_str]["y"]))
+                x1, y1 = cx - w // 2, cy - h // 2
+                x2, y2 = x1 + w, y1 + h
+                bg_crop = bg_plate[max(0, y1):y2, max(0, x1):x2]
+                if bg_crop.shape == raw_patch.shape:
+                    cv2.imwrite(str(bg_sub_dst / src_png.name), cv2.absdiff(raw_patch, bg_crop))
 
         return Pass2AcceptedOutput(
             fps=raw_result.fps,

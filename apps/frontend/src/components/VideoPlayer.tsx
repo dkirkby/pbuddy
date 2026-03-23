@@ -8,7 +8,7 @@
  * ◀| / |▶  step one frame per press; hold for continuous stepping
  * ⏮        rewind to the beginning
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { CourtGeometry } from '../types/api'
 
 interface Detection {
@@ -53,6 +53,12 @@ function fmtTime(s: number): string {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+const PATCH_RADIUS = 32  // bg-plate pixels; matches dimensions.json ball_specifications.patch_radius_px
+
+export interface VideoPlayerHandle {
+  seekToFrame: (frameIndex: number) => void
+}
+
 type PlaybackState = 'stopped' | 'playing' | 'fast-forward' | 'fast-reverse'
 
 interface BallAnnotation {
@@ -69,19 +75,25 @@ interface Props {
   courtGeometry?: CourtGeometry
   totalFrames: number
   annotations?: Record<number, BallAnnotation>
-  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean) => void
+  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean, patchDataUrl: string | null) => void
   ballCount?: number
   storageKey?: string
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function VideoPlayer({
+export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, courtGeometry, totalFrames,
   annotations, onVideoClick, ballCount, storageKey,
-}: Props) {
+}, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useImperativeHandle(ref, () => ({
+    seekToFrame: (fi) => {
+      if (videoRef.current) videoRef.current.currentTime = fi / fpsRef.current
+    },
+  }))
 
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped')
   const [currentTime, setCurrentTime] = useState(0)
@@ -404,7 +416,28 @@ export function VideoPlayer({
     const bgX = (e.clientX - rect.left) / video.clientWidth * bgWidth
     const bgY = (e.clientY - rect.top) / video.clientHeight * bgHeight
     const fi = Math.round(video.currentTime * fpsRef.current)
-    onVideoClick(fi, bgX, bgY, e.shiftKey)
+
+    let patchDataUrl: string | null = null
+    if (!e.shiftKey) {
+      const size = PATCH_RADIUS * 2
+      const offscreen = document.createElement('canvas')
+      offscreen.width = size
+      offscreen.height = size
+      const pctx = offscreen.getContext('2d')
+      if (pctx) {
+        const scaleX = video.videoWidth / bgWidth
+        const scaleY = video.videoHeight / bgHeight
+        pctx.drawImage(
+          video,
+          (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
+          size * scaleX, size * scaleY,
+          0, 0, size, size,
+        )
+        patchDataUrl = offscreen.toDataURL('image/png')
+      }
+    }
+
+    onVideoClick(fi, bgX, bgY, e.shiftKey, patchDataUrl)
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -550,4 +583,4 @@ export function VideoPlayer({
       )}
     </div>
   )
-}
+})

@@ -321,11 +321,21 @@ def get_pass2_corrections(
     db: Session = Depends(get_db),
     settings=Depends(get_settings),
 ):
+    import base64
     from pbva_core import paths as p
-    ann_path = p.pass_corrections_dir(settings.data_root, project_id, "pass2") / "annotations.json"
-    if not ann_path.exists():
-        return {"ok": True, "data": {"annotations": {}}}
-    return {"ok": True, "data": json.loads(ann_path.read_text())}
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
+    ann_path = corrections_dir / "annotations.json"
+    data = json.loads(ann_path.read_text()) if ann_path.exists() else {"annotations": {}}
+
+    patches: dict[str, str] = {}
+    patches_dir = corrections_dir / "patches" / "raw"
+    if patches_dir.exists():
+        for png_path in sorted(patches_dir.glob("*.png")):
+            frame_str = str(int(png_path.stem))  # strip leading zeros → int str
+            b64 = base64.b64encode(png_path.read_bytes()).decode()
+            patches[frame_str] = f"data:image/png;base64,{b64}"
+
+    return {"ok": True, "data": {**data, "patches": patches}}
 
 
 @router.put("/{project_id}/passes/pass2/corrections")
@@ -335,6 +345,7 @@ def save_pass2_corrections(
     db: Session = Depends(get_db),
     settings=Depends(get_settings),
 ):
+    import base64
     pass_row = _get_pass_or_404(db, project_id, "pass2")
     if pass_row.state != PassState.waiting_for_user.value:
         raise HTTPException(
@@ -343,14 +354,25 @@ def save_pass2_corrections(
         )
 
     from pbva_pipeline.pass2.run import Pass2
-    corrections = Pass2().validate_corrections(body)
+    corrections = Pass2().validate_corrections({"annotations": body.get("annotations", {})})
 
     from pbva_core import paths as p
     corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
     corrections_dir.mkdir(parents=True, exist_ok=True)
+
     ann_data = {k: {"x": v.x, "y": v.y} for k, v in corrections.annotations.items()}
     ann_path = corrections_dir / "annotations.json"
     ann_path.write_text(json.dumps({"annotations": ann_data}, indent=2))
+
+    # Write patches: clear old files, write the complete current set.
+    patches_dir = corrections_dir / "patches" / "raw"
+    if patches_dir.exists():
+        for old_png in patches_dir.glob("*.png"):
+            old_png.unlink()
+    patches_dir.mkdir(parents=True, exist_ok=True)
+    for frame_str, data_url in body.get("patches", {}).items():
+        _header, b64_data = data_url.split(",", 1)
+        (patches_dir / f"{int(frame_str):06d}.png").write_bytes(base64.b64decode(b64_data))
 
     # Register correction artifact.
     art_id = str(uuid.uuid4())

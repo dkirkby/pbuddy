@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
+import type { VideoPlayerHandle } from '../components/VideoPlayer'
 import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass2RawResult } from '../types/api'
+
+const PATCH_RADIUS = 32   // must match VideoPlayer PATCH_RADIUS
+const PATCH_DISPLAY_ZOOM = 3
+const PATCH_DISPLAY_SIZE = PATCH_RADIUS * 2 * PATCH_DISPLAY_ZOOM  // 192 px
 
 interface Pass1AcceptedOutput {
   court_geometry: CourtGeometry
@@ -15,8 +20,10 @@ export default function Pass2Page() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const playerRef = useRef<VideoPlayerHandle>(null)
 
   const [annotations, setAnnotations] = useState<Record<string, BallAnnotation>>({})
+  const [patches, setPatches] = useState<Record<string, string>>({})
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -57,17 +64,21 @@ export default function Pass2Page() {
     enabled: !!pass1AcceptedArt,
   })
 
-  // Load saved annotations on mount.
+  // Load saved annotations and patches on mount.
   const { data: correctionsResp } = useQuery({
     queryKey: ['pass2-corrections', projectId],
     queryFn: () => api.getPass2Corrections(projectId!),
     staleTime: Infinity,
   })
   useEffect(() => {
-    if (correctionsResp?.data?.annotations) {
+    if (!correctionsResp?.data) return
+    if (correctionsResp.data.annotations) {
       setAnnotations(correctionsResp.data.annotations)
-      setDirty(false)
     }
+    if (correctionsResp.data.patches) {
+      setPatches(correctionsResp.data.patches)
+    }
+    setDirty(false)
   }, [correctionsResp])
 
   // Convert annotations to number-keyed map for VideoPlayer.
@@ -80,13 +91,23 @@ export default function Pass2Page() {
   }, [annotations])
 
   const handleVideoClick = useCallback(
-    (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean) => {
+    (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean, patchDataUrl: string | null) => {
+      const key = String(frameIndex)
       setAnnotations((prev) => {
         const next = { ...prev }
         if (shiftKey) {
-          delete next[String(frameIndex)]
+          delete next[key]
         } else {
-          next[String(frameIndex)] = { x: Math.round(bgX * 10) / 10, y: Math.round(bgY * 10) / 10 }
+          next[key] = { x: Math.round(bgX * 10) / 10, y: Math.round(bgY * 10) / 10 }
+        }
+        return next
+      })
+      setPatches((prev) => {
+        const next = { ...prev }
+        if (shiftKey) {
+          delete next[key]
+        } else if (patchDataUrl) {
+          next[key] = patchDataUrl
         }
         return next
       })
@@ -100,7 +121,7 @@ export default function Pass2Page() {
     setSaving(true)
     setStatusMsg(null)
     try {
-      await api.savePass2Annotations(projectId!, annotations)
+      await api.savePass2Annotations(projectId!, annotations, patches)
       setDirty(false)
       qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
       setStatusMsg('Saved.')
@@ -130,6 +151,10 @@ export default function Pass2Page() {
   const bgWidth = resultData?.bg_width ?? 960
   const bgHeight = resultData?.bg_height ?? 540
   const ballCount = Object.keys(annotations).length
+
+  const sortedPatchEntries = Object.entries(patches).sort(
+    ([a], [b]) => parseInt(a) - parseInt(b)
+  )
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -182,6 +207,7 @@ export default function Pass2Page() {
         </div>
       ) : (
         <VideoPlayer
+          ref={playerRef}
           videoUrl={api.videoUrl(projectId!)}
           fps={fps}
           bgWidth={bgWidth}
@@ -193,6 +219,34 @@ export default function Pass2Page() {
           ballCount={ballCount}
           storageKey={`pass2-pos-${projectId}`}
         />
+      )}
+
+      {/* Ball patch gallery */}
+      {sortedPatchEntries.length > 0 && (
+        <div style={{
+          marginTop: 12, overflowX: 'auto', display: 'flex', gap: 6,
+          padding: '8px 4px', background: '#111', borderRadius: 4,
+        }}>
+          {sortedPatchEntries.map(([fi, dataUrl]) => (
+            <div
+              key={fi}
+              style={{ flexShrink: 0, textAlign: 'center', cursor: 'pointer' }}
+              onClick={() => playerRef.current?.seekToFrame(parseInt(fi))}
+              title={`Frame ${fi} — click to seek`}
+            >
+              <img
+                src={dataUrl}
+                style={{
+                  display: 'block',
+                  width: PATCH_DISPLAY_SIZE,
+                  height: PATCH_DISPLAY_SIZE,
+                  imageRendering: 'pixelated',
+                }}
+              />
+              <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>{fi}</div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )

@@ -77,8 +77,8 @@ export const api = {
   getPass2Corrections: (projectId: string) =>
     get<{ ok: boolean; data: Pass2Corrections }>(`/api/projects/${projectId}/passes/pass2/corrections`),
 
-  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>) =>
-    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations }),
+  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>, patches: Record<string, string>) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations, patches }),
 
   acceptPass2: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),
