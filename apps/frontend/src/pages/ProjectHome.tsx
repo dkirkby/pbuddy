@@ -60,7 +60,11 @@ export default function ProjectHome() {
 
   const runPass2 = useMutation({
     mutationFn: () => api.runPass2(projectId!),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
+      sessionStorage.removeItem(`pass2-pos-${projectId}`)
+    },
   })
 
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>

@@ -322,6 +322,11 @@ def get_pass2_corrections(
     settings=Depends(get_settings),
 ):
     import base64
+    # Return empty if corrections were cleared by a re-run.
+    pass_row = _get_pass_or_404(db, project_id, "pass2")
+    if not pass_row.latest_correction_id:
+        return {"ok": True, "data": {"annotations": {}, "patches": {}}}
+
     from pbva_core import paths as p
     corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
     ann_path = corrections_dir / "annotations.json"
@@ -331,7 +336,7 @@ def get_pass2_corrections(
     patches_dir = corrections_dir / "patches" / "raw"
     if patches_dir.exists():
         for png_path in sorted(patches_dir.glob("*.png")):
-            frame_str = str(int(png_path.stem))  # strip leading zeros → int str
+            frame_str = str(int(png_path.stem))
             b64 = base64.b64encode(png_path.read_bytes()).decode()
             patches[frame_str] = f"data:image/png;base64,{b64}"
 
