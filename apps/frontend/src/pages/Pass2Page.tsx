@@ -96,36 +96,27 @@ export default function Pass2Page() {
   }, [annotations])
 
   const handleVideoClick = useCallback(
-    (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean, patchDataUrl: string | null) => {
+    (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null) => {
       const key = String(frameIndex)
-      setAnnotations((prev) => {
-        const next = { ...prev }
-        if (shiftKey) {
-          delete next[key]
-        } else {
-          next[key] = { x: Math.round(bgX * 10) / 10, y: Math.round(bgY * 10) / 10 }
-        }
-        return next
-      })
-      setPatches((prev) => {
-        const next = { ...prev }
-        if (shiftKey) {
-          delete next[key]
-        } else if (patchDataUrl) {
-          next[key] = patchDataUrl
-        }
-        return next
-      })
-      setPatchOrder((prev) =>
-        shiftKey
-          ? prev.filter((k) => k !== key)
-          : [key, ...prev.filter((k) => k !== key)]
-      )
+      setAnnotations((prev) => ({
+        ...prev,
+        [key]: { x: Math.round(bgX * 10) / 10, y: Math.round(bgY * 10) / 10 },
+      }))
+      setPatches((prev) => patchDataUrl ? { ...prev, [key]: patchDataUrl } : prev)
+      setPatchOrder((prev) => [key, ...prev.filter((k) => k !== key)])
       setDirty(true)
       setStatusMsg(null)
     },
     []
   )
+
+  function handleDeleteAnnotation(fi: string) {
+    setAnnotations((prev) => { const next = { ...prev }; delete next[fi]; return next })
+    setPatches((prev) => { const next = { ...prev }; delete next[fi]; return next })
+    setPatchOrder((prev) => prev.filter((k) => k !== fi))
+    setDirty(true)
+    setStatusMsg(null)
+  }
 
   async function handleSave() {
     setSaving(true)
@@ -199,7 +190,7 @@ export default function Pass2Page() {
       </div>
 
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
-        Click on the ball to mark its centre. Shift-click to remove a mark.
+        Click on the ball to mark its centre. Use the × button on a patch to remove a mark.
         {dirty && <span style={{ color: '#f90', marginLeft: 8 }}>⚠ Unsaved changes</span>}
       </p>
 
@@ -280,6 +271,20 @@ export default function Pass2Page() {
                 textAlign: 'center', fontSize: 10, color: '#fff',
                 textShadow: '0 0 3px #000', pointerEvents: 'none',
               }}>{fi}</span>
+              {/* Delete button */}
+              <button
+                style={{
+                  position: 'absolute', top: 2, right: 2,
+                  width: 18, height: 18,
+                  background: 'rgba(0,0,0,0.6)', color: '#fff',
+                  border: 'none', borderRadius: '50%',
+                  cursor: 'pointer', fontSize: 12,
+                  padding: 0, lineHeight: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                onClick={(e) => { e.stopPropagation(); handleDeleteAnnotation(fi) }}
+                title="Remove annotation"
+              >×</button>
             </div>
           ))}
         </div>

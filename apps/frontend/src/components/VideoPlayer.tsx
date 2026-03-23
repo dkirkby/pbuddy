@@ -82,7 +82,7 @@ interface Props {
   courtGeometry?: CourtGeometry
   totalFrames: number
   annotations?: Record<number, BallAnnotation>
-  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, shiftKey: boolean, patchDataUrl: string | null) => void
+  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null) => void
   ballCount?: number
   storageKey?: string
   previewCanvasRef?: React.RefObject<HTMLCanvasElement>
@@ -430,30 +430,28 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     const fi = Math.round(video.currentTime * fpsRef.current)
 
     let patchDataUrl: string | null = null
-    if (!e.shiftKey) {
-      const size = PATCH_RADIUS * 2
-      const offscreen = document.createElement('canvas')
-      offscreen.width = size
-      offscreen.height = size
-      const pctx = offscreen.getContext('2d')
-      if (pctx) {
-        try {
-          const scaleX = video.videoWidth / bgWidth
-          const scaleY = video.videoHeight / bgHeight
-          pctx.drawImage(
-            video,
-            (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
-            size * scaleX, size * scaleY,
-            0, 0, size, size,
-          )
-          patchDataUrl = offscreen.toDataURL('image/png')
-        } catch {
-          // canvas tainted (cross-origin) — proceed without patch
-        }
+    const size = PATCH_RADIUS * 2
+    const offscreen = document.createElement('canvas')
+    offscreen.width = size
+    offscreen.height = size
+    const pctx = offscreen.getContext('2d')
+    if (pctx) {
+      try {
+        const scaleX = video.videoWidth / bgWidth
+        const scaleY = video.videoHeight / bgHeight
+        pctx.drawImage(
+          video,
+          (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
+          size * scaleX, size * scaleY,
+          0, 0, size, size,
+        )
+        patchDataUrl = offscreen.toDataURL('image/png')
+      } catch {
+        // canvas tainted (cross-origin) — proceed without patch
       }
     }
 
-    onVideoClick(fi, bgX, bgY, e.shiftKey, patchDataUrl)
+    onVideoClick(fi, bgX, bgY, patchDataUrl)
   }
 
   // ── Live patch preview (drawn into an external canvas supplied by the parent) ─
