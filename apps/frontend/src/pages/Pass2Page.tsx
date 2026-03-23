@@ -5,8 +5,9 @@ import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
 import type { VideoPlayerHandle } from '../components/VideoPlayer'
 import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass2RawResult } from '../types/api'
+import { BALL_PATCH_RADIUS } from '../lib/dimensions'
 
-const PATCH_RADIUS = 32   // must match VideoPlayer PATCH_RADIUS
+const PATCH_RADIUS = BALL_PATCH_RADIUS
 const PATCH_DISPLAY_ZOOM = 2
 const PATCH_DISPLAY_SIZE = PATCH_RADIUS * 2 * PATCH_DISPLAY_ZOOM  // 128 px
 

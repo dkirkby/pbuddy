@@ -20,18 +20,18 @@
  */
 
 import type { CourtGeometry } from '../types/api'
+import {
+  COURT_TOTAL_WIDTH, COURT_TOTAL_LENGTH,
+  VOLUME_BOUNDARY_EXTENSION, VOLUME_CORNER_HEIGHT, VOLUME_NET_HEIGHT,
+} from './dimensions'
 
-// ─── Physical constants (from dimensions.json) ────────────────────────────────
+// ─── Derived constants ────────────────────────────────────────────────────────
 
-const HALF_W  = 6.10  / 2        // 3.05 m — half court width
-const HALF_L  = 13.41 / 2        // 6.705 m — half court length
+const HALF_W = COURT_TOTAL_WIDTH  / 2   // 3.05 m — half court width
+const HALF_L = COURT_TOTAL_LENGTH / 2   // 6.705 m — half court length
 
-const VOL_EXT    = 0.50           // boundary_extension
-const VOL_CORNER = 1.00           // corner_height
-const VOL_NET    = 3.00           // net_height
-
-const HW_EXT = HALF_W + VOL_EXT  // 3.55 m
-const HL_EXT = HALF_L + VOL_EXT  // 7.205 m
+const HW_EXT = HALF_W + VOLUME_BOUNDARY_EXTENSION  // 3.55 m
+const HL_EXT = HALF_L + VOLUME_BOUNDARY_EXTENSION  // 7.205 m
 
 // ─── Homography helpers ───────────────────────────────────────────────────────
 
@@ -217,13 +217,13 @@ const VOLUME_VERTICES: [number, number, number][] = [
   [ HW_EXT,  HL_EXT, 0],   // 2
   [-HW_EXT,  HL_EXT, 0],   // 3
   // top corners
-  [-HW_EXT, -HL_EXT, VOL_CORNER],  // 4
-  [ HW_EXT, -HL_EXT, VOL_CORNER],  // 5
-  [ HW_EXT,  HL_EXT, VOL_CORNER],  // 6
-  [-HW_EXT,  HL_EXT, VOL_CORNER],  // 7
+  [-HW_EXT, -HL_EXT, VOLUME_CORNER_HEIGHT],  // 4
+  [ HW_EXT, -HL_EXT, VOLUME_CORNER_HEIGHT],  // 5
+  [ HW_EXT,  HL_EXT, VOLUME_CORNER_HEIGHT],  // 6
+  [-HW_EXT,  HL_EXT, VOLUME_CORNER_HEIGHT],  // 7
   // tent peaks at net (Y=0)
-  [-HW_EXT,  0,       VOL_NET],    // 8
-  [ HW_EXT,  0,       VOL_NET],    // 9
+  [-HW_EXT,  0,      VOLUME_NET_HEIGHT],     // 8
+  [ HW_EXT,  0,      VOLUME_NET_HEIGHT],     // 9
 ]
 
 /** Edges as pairs of vertex indices into VOLUME_VERTICES. */

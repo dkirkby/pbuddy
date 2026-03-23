@@ -11,6 +11,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { CourtGeometry } from '../types/api'
 import { computeVolumeOverlay } from '../lib/courtCamera'
+import { BALL_PATCH_RADIUS, COURT_KV } from '../lib/dimensions'
 
 interface Detection {
   cx: number; cy: number; a: number; b: number; angle: number
@@ -19,7 +20,7 @@ interface Detection {
 
 // ─── Court geometry helpers ──────────────────────────────────────────────────
 
-const KV = (22 - 7) / 44
+const KV = COURT_KV
 const COURT_LINES = [
   [0, 0, 1, 0], [1, 0, 1, 1], [1, 1, 0, 1], [0, 1, 0, 0], // boundary
   [0, 0.5, 1, 0.5],                                          // net
@@ -54,7 +55,7 @@ function fmtTime(s: number): string {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-const PATCH_RADIUS = 32  // bg-plate pixels; matches dimensions.json ball_specifications.patch_radius_px
+const PATCH_RADIUS = BALL_PATCH_RADIUS  // bg-plate pixels; from dimensions.json
 
 // Hollow-circle cursor that mirrors the canvas annotation marker.
 const _cursorSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21">'
