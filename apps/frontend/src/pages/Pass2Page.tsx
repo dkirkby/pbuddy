@@ -57,6 +57,10 @@ export default function Pass2Page() {
   const pass1AcceptedArt = (pass1ArtResp?.data ?? []).find(
     (a) => a.artifact_role === 'accepted' && a.artifact_type === 'json'
   )
+  const bgPlateArtifact = (pass1ArtResp?.data ?? []).find(
+    (a) => a.artifact_role === 'raw' && a.artifact_type === 'png'
+  )
+  const bgPlateUrl = bgPlateArtifact ? api.artifactUrl(bgPlateArtifact.id) : undefined
   const { data: pass1Accepted } = useQuery<Pass1AcceptedOutput>({
     queryKey: ['pass1-accepted', projectId],
     queryFn: async () => {
@@ -216,6 +220,7 @@ export default function Pass2Page() {
           ballCount={ballCount}
           storageKey={`pass2-pos-${projectId}`}
           previewCanvasRef={previewRef}
+          bgPlateUrl={bgPlateUrl}
         />
       )}
 

@@ -86,16 +86,19 @@ interface Props {
   ballCount?: number
   storageKey?: string
   previewCanvasRef?: React.RefObject<HTMLCanvasElement>
+  bgPlateUrl?: string
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, courtGeometry, totalFrames,
-  annotations, onVideoClick, ballCount, storageKey, previewCanvasRef,
+  annotations, onVideoClick, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const bgSubCanvasRef = useRef<HTMLCanvasElement>(null)
+  const bgPlateRef = useRef<HTMLImageElement | null>(null)
   const mouseRef = useRef<{ x: number; y: number } | null>(null)
 
   useImperativeHandle(ref, () => ({
@@ -108,6 +111,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showCourt, setShowCourt] = useState(false)
+  const [showBgSub, setShowBgSub] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [detCount, setDetCount] = useState(0)
   const [mouseOverVideo, setMouseOverVideo] = useState(false)
@@ -123,6 +127,45 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   useEffect(() => { playbackStateRef.current = playbackState }, [playbackState])
   useEffect(() => { fpsRef.current = fps }, [fps])
+
+  // Load median bg plate image whenever the URL changes.
+  useEffect(() => {
+    if (!bgPlateUrl) return
+    const img = new Image()
+    img.onload = () => { bgPlateRef.current = img }
+    img.src = bgPlateUrl
+  }, [bgPlateUrl])
+
+  // rAF loop that composites frame − bg into bgSubCanvasRef when bg-sub mode is on.
+  useEffect(() => {
+    if (!showBgSub) return
+    let rafId: number
+    function tick() {
+      const video = videoRef.current
+      const canvas = bgSubCanvasRef.current
+      const plate = bgPlateRef.current
+      if (video && canvas && plate) {
+        const w = video.clientWidth
+        const h = video.clientHeight
+        if (w > 0 && h > 0) {
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w
+            canvas.height = h
+          }
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, w, h)
+            ctx.globalCompositeOperation = 'difference'
+            ctx.drawImage(plate, 0, 0, w, h)
+            ctx.globalCompositeOperation = 'source-over'
+          }
+        }
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [showBgSub])
 
   // ── Canvas drawing ──────────────────────────────────────────────────────────
 
@@ -520,7 +563,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         <video
           ref={videoRef}
           src={videoUrl}
-          style={{ display: 'block', maxWidth: '100%', maxHeight: 540 }}
+          style={{ display: 'block', maxWidth: '100%', maxHeight: 540, visibility: showBgSub ? 'hidden' : 'visible' }}
           onLoadedMetadata={() => {
             const v = videoRef.current
             if (!v) return
@@ -530,6 +573,13 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
               if (saved > 0 && saved < v.duration) v.currentTime = saved
             }
             drawOverlay()
+          }}
+        />
+        <canvas
+          ref={bgSubCanvasRef}
+          style={{
+            position: 'absolute', top: 0, left: 0, pointerEvents: 'none',
+            display: showBgSub ? 'block' : 'none',
           }}
         />
         <canvas
@@ -602,6 +652,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           <input type="checkbox" checked={showCourt} onChange={(e) => setShowCourt(e.target.checked)} />
           Court
         </label>
+
+        {/* Bg-sub toggle — only shown when a bg plate URL is available */}
+        {bgPlateUrl && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
+            <input type="checkbox" checked={showBgSub} onChange={(e) => setShowBgSub(e.target.checked)} />
+            Bg sub
+          </label>
+        )}
 
         {/* Ball annotation count */}
         {ballCount !== undefined && (
