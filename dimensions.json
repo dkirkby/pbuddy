@@ -30,9 +30,9 @@
     "patch_radius_px": 32
   },
   "valid_ball_volume": {
-    "boundary_extension": 0.5,
+    "boundary_extension": 1.0,
     "corner_height": 1.0,
-    "net_height": 3.0
+    "net_height": 4.0
   },
   "sources": [
     "https://usapickleball.org/what-is-pickleball/official-rules/",
