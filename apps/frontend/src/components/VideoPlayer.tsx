@@ -55,6 +55,13 @@ function fmtTime(s: number): string {
 
 const PATCH_RADIUS = 32  // bg-plate pixels; matches dimensions.json ball_specifications.patch_radius_px
 
+// Hollow-circle cursor that mirrors the canvas annotation marker.
+const _cursorSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21">'
+  + '<circle cx="10.5" cy="10.5" r="8.5" fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="2.5"/>'
+  + '<circle cx="10.5" cy="10.5" r="8.5" fill="none" stroke="white" stroke-width="1.5"/>'
+  + '</svg>'
+const CIRCLE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(_cursorSvg)}") 10 10, crosshair`
+
 export interface VideoPlayerHandle {
   seekToFrame: (frameIndex: number) => void
 }
@@ -453,7 +460,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       <div
         style={{
           position: 'relative', display: 'inline-block', maxWidth: '100%',
-          cursor: onVideoClick ? 'crosshair' : 'default',
+          cursor: onVideoClick ? CIRCLE_CURSOR : 'default',
         }}
         onClick={handleContainerClick}
       >
