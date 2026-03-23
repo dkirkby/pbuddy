@@ -7,8 +7,8 @@ import type { VideoPlayerHandle } from '../components/VideoPlayer'
 import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass2RawResult } from '../types/api'
 
 const PATCH_RADIUS = 32   // must match VideoPlayer PATCH_RADIUS
-const PATCH_DISPLAY_ZOOM = 3
-const PATCH_DISPLAY_SIZE = PATCH_RADIUS * 2 * PATCH_DISPLAY_ZOOM  // 192 px
+const PATCH_DISPLAY_ZOOM = 2
+const PATCH_DISPLAY_SIZE = PATCH_RADIUS * 2 * PATCH_DISPLAY_ZOOM  // 128 px
 
 interface Pass1AcceptedOutput {
   court_geometry: CourtGeometry
@@ -24,6 +24,7 @@ export default function Pass2Page() {
 
   const [annotations, setAnnotations] = useState<Record<string, BallAnnotation>>({})
   const [patches, setPatches] = useState<Record<string, string>>({})
+  const [patchOrder, setPatchOrder] = useState<string[]>([])
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -77,6 +78,9 @@ export default function Pass2Page() {
     }
     if (correctionsResp.data.patches) {
       setPatches(correctionsResp.data.patches)
+      setPatchOrder(
+        Object.keys(correctionsResp.data.patches).sort((a, b) => parseInt(b) - parseInt(a))
+      )
     }
     setDirty(false)
   }, [correctionsResp])
@@ -111,6 +115,11 @@ export default function Pass2Page() {
         }
         return next
       })
+      setPatchOrder((prev) =>
+        shiftKey
+          ? prev.filter((k) => k !== key)
+          : [key, ...prev.filter((k) => k !== key)]
+      )
       setDirty(true)
       setStatusMsg(null)
     },
@@ -151,10 +160,6 @@ export default function Pass2Page() {
   const bgWidth = resultData?.bg_width ?? 960
   const bgHeight = resultData?.bg_height ?? 540
   const ballCount = Object.keys(annotations).length
-
-  const sortedPatchEntries = Object.entries(patches).sort(
-    ([a], [b]) => parseInt(a) - parseInt(b)
-  )
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -221,21 +226,21 @@ export default function Pass2Page() {
         />
       )}
 
-      {/* Ball patch gallery */}
-      {sortedPatchEntries.length > 0 && (
+      {/* Ball patch gallery — most recent on the left */}
+      {patchOrder.length > 0 && (
         <div style={{
-          marginTop: 12, overflowX: 'auto', display: 'flex', gap: 6,
-          padding: '8px 4px', background: '#111', borderRadius: 4,
+          marginTop: 12, overflowX: 'auto', display: 'flex', gap: 4,
+          padding: '4px', background: '#111', borderRadius: 4,
         }}>
-          {sortedPatchEntries.map(([fi, dataUrl]) => (
+          {patchOrder.filter((fi) => patches[fi]).map((fi) => (
             <div
               key={fi}
-              style={{ flexShrink: 0, textAlign: 'center', cursor: 'pointer' }}
+              style={{ position: 'relative', flexShrink: 0, cursor: 'pointer' }}
               onClick={() => playerRef.current?.seekToFrame(parseInt(fi))}
               title={`Frame ${fi} — click to seek`}
             >
               <img
-                src={dataUrl}
+                src={patches[fi]}
                 style={{
                   display: 'block',
                   width: PATCH_DISPLAY_SIZE,
@@ -243,7 +248,11 @@ export default function Pass2Page() {
                   imageRendering: 'pixelated',
                 }}
               />
-              <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>{fi}</div>
+              <span style={{
+                position: 'absolute', bottom: 2, left: 0, right: 0,
+                textAlign: 'center', fontSize: 10, color: '#fff',
+                textShadow: '0 0 3px #000', pointerEvents: 'none',
+              }}>{fi}</span>
             </div>
           ))}
         </div>

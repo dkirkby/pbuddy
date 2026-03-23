@@ -425,15 +425,19 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       offscreen.height = size
       const pctx = offscreen.getContext('2d')
       if (pctx) {
-        const scaleX = video.videoWidth / bgWidth
-        const scaleY = video.videoHeight / bgHeight
-        pctx.drawImage(
-          video,
-          (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
-          size * scaleX, size * scaleY,
-          0, 0, size, size,
-        )
-        patchDataUrl = offscreen.toDataURL('image/png')
+        try {
+          const scaleX = video.videoWidth / bgWidth
+          const scaleY = video.videoHeight / bgHeight
+          pctx.drawImage(
+            video,
+            (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
+            size * scaleX, size * scaleY,
+            0, 0, size, size,
+          )
+          patchDataUrl = offscreen.toDataURL('image/png')
+        } catch {
+          // canvas tainted (cross-origin) — proceed without patch
+        }
       }
     }
 
