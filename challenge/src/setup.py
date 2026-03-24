@@ -1,15 +1,89 @@
 """
-Ball detection challenge utilities.
+Pickleball ball detection challenge — evaluation harness.
 
-Data layout (relative to this file's grandparent directory):
-  challenge/data/truth.json
-  challenge/data/images/frame_NNNNN.jpg  — video frame at bg-plate resolution
-  challenge/data/images/bsub_NNNNN.jpg   — |frame(n) - median bg|
-  challenge/data/images/prev_NNNNN.jpg   — |frame(n) - frame(n-1)|
-  challenge/data/images/next_NNNNN.jpg   — |frame(n+1) - frame(n)|
+═══════════════════════════════════════════════════════════════════════════════
+THE PROBLEM
+═══════════════════════════════════════════════════════════════════════════════
 
-All images are masked to the tent silhouette (pixels outside are black).
-All coordinates are in bg-plate pixel space.
+A pickleball match was recorded from a fixed overhead-ish camera inside a
+covered court (a tent). A human operator watched the video and manually
+clicked on the ball in a set of selected frames, producing a set of
+ground-truth ball positions. Your goal is to write a function that
+automatically locates the ball in each frame.
+
+═══════════════════════════════════════════════════════════════════════════════
+THE IMAGES
+═══════════════════════════════════════════════════════════════════════════════
+
+For each annotated frame n, four BGR images are provided (OpenCV format,
+dtype uint8):
+
+  frame   The raw decoded video frame, scaled to the background-plate
+          resolution (see COORDINATE SYSTEM below).
+
+  bsub    Absolute difference between frame(n) and a pre-computed median
+          background image built from many stable frames of the same video:
+            bsub = |frame(n) - median_background|
+          Pixels that look like the static background are dark; moving
+          objects (including the ball) are bright.
+
+  prev    Absolute difference between consecutive frames:
+            prev = |frame(n) - frame(n-1)|
+          Highlights pixels that changed since the previous frame.
+
+  next    Absolute difference between consecutive frames:
+            next = |frame(n+1) - frame(n)|
+          Highlights pixels that will change in the next frame.
+
+  The temporal images (prev, next) capture motion. A fast-moving ball
+  typically appears as a bright blob in both. A ball that happens to
+  be stationary for a moment may appear dimly in bsub but not in prev/next.
+
+All four images are the same size and are registered to one another — a
+pixel at (x, y) represents the same point in all four.
+
+All pixels outside the valid court volume (a tent-shaped region that covers
+the court plus a margin, up to net height at the centre and corner height at
+the four corners) are set to black. Your detector can safely ignore any black
+region at the image borders.
+
+═══════════════════════════════════════════════════════════════════════════════
+COORDINATE SYSTEM
+═══════════════════════════════════════════════════════════════════════════════
+
+All pixel coordinates use the standard image convention: origin (0, 0) at the
+top-left corner, x increasing rightward, y increasing downward.
+
+The "background-plate resolution" is the resolution of the median background
+image, which equals the native video resolution capped at 1920×1080 with
+aspect ratio preserved. All four images share this resolution, and all (x, y)
+coordinates in truth.json are expressed in this same pixel space.
+
+═══════════════════════════════════════════════════════════════════════════════
+DATA LAYOUT
+═══════════════════════════════════════════════════════════════════════════════
+
+  data/truth.json                   — ground-truth ball positions
+  data/images/frame_NNNNN.jpg       — raw video frame
+  data/images/bsub_NNNNN.jpg        — background-subtracted frame
+  data/images/prev_NNNNN.jpg        — temporal diff with previous frame
+  data/images/next_NNNNN.jpg        — temporal diff with next frame
+
+where NNNNN is the zero-padded frame index.
+
+═══════════════════════════════════════════════════════════════════════════════
+THE METRIC
+═══════════════════════════════════════════════════════════════════════════════
+
+The score is the RMS of per-frame pixel errors, where each frame contributes
+one of two ways:
+
+  Detection returned:  min(euclidean_distance, MAX_ERROR)² added to the sum.
+  Abstention (None):   ABSTAIN_ERROR² added to the sum.
+
+Because ABSTAIN_ERROR < MAX_ERROR, returning None is always preferable to
+returning a wildly wrong position. A perfect detector scores 0; a pure
+abstainer scores ABSTAIN_ERROR = 32 px.
 """
 
 from __future__ import annotations
@@ -29,24 +103,31 @@ _IMAGES_DIR = _DATA_DIR / "images"
 # ─── Data types ───────────────────────────────────────────────────────────────
 
 class Images(NamedTuple):
-    """Four images for a single annotated frame, all in bg-plate pixel space."""
-    frame: np.ndarray  # decoded video frame
+    """The four images available for a single annotated frame.
+
+    All arrays are BGR uint8 (OpenCV format), same shape, same pixel space.
+    Pixels outside the valid court tent silhouette are black in all four.
+    """
+    frame: np.ndarray  # raw decoded video frame
     bsub:  np.ndarray  # |frame(n) - median background|
     prev:  np.ndarray  # |frame(n) - frame(n-1)|
     next:  np.ndarray  # |frame(n+1) - frame(n)|
 
 
 class Detection(NamedTuple):
-    """Ground-truth ball position for one frame."""
-    frame: int    # frame index
-    x:     float  # ball centre x in bg-plate pixel space
-    y:     float  # ball centre y in bg-plate pixel space
+    """One ground-truth ball position."""
+    frame: int    # zero-based frame index in the original video
+    x:     float  # ball centre x in background-plate pixel space
+    y:     float  # ball centre y in background-plate pixel space
 
 
 # ─── Loaders ──────────────────────────────────────────────────────────────────
 
 def load_images(frame_n: int) -> Images:
-    """Load the four images for frame *frame_n* and return them as an Images tuple."""
+    """Load and return the four images for frame *frame_n*.
+
+    Images are loaded with cv2.imread and returned as BGR uint8 arrays.
+    """
     n = f"{frame_n:05d}"
     return Images(
         frame=cv2.imread(str(_IMAGES_DIR / f"frame_{n}.jpg")),
@@ -57,7 +138,7 @@ def load_images(frame_n: int) -> Images:
 
 
 def load_truth() -> list[Detection]:
-    """Load truth.json and return a list of Detection entries sorted by frame."""
+    """Load and return all ground-truth detections, sorted by frame index."""
     with open(_DATA_DIR / "truth.json") as f:
         data = json.load(f)
     return [Detection(frame=d["frame"], x=d["x"], y=d["y"]) for d in data]
@@ -65,25 +146,32 @@ def load_truth() -> list[Detection]:
 
 # ─── Metric ───────────────────────────────────────────────────────────────────
 
-MAX_ERROR     = 64   # pixels — maximum per-frame error contribution
-ABSTAIN_ERROR = 32   # pixels — penalty for not returning a detection (< MAX_ERROR,
-                     #           so abstaining is always preferred to a bad detection)
+MAX_ERROR     = 64   # pixels — per-frame error is capped at this value
+ABSTAIN_ERROR = 32   # pixels — cost of returning None instead of a detection;
+                     #   less than MAX_ERROR so abstaining beats a bad detection
 
 
 def calculate_metric(
     find_ball: Callable[[Images], tuple[float, float] | None],
 ) -> float:
-    """Compute RMS pixel error of *find_ball* against the ground-truth positions.
+    """Evaluate *find_ball* against the ground truth and return the RMS error.
+
+    For every ground-truth frame, *find_ball* is called with an Images tuple.
+    Its return value determines the per-frame squared-error contribution:
+
+      (x, y) returned → min(euclidean_distance², MAX_ERROR²)
+      None returned   → ABSTAIN_ERROR²
+      Exception raised → treated as None (exception is printed)
+
+    The RMS of all per-frame contributions is returned. A perfect detector
+    scores 0; a pure abstainer scores ABSTAIN_ERROR px.
 
     Args:
-        find_ball: function that receives an Images namedtuple and returns
-                   (x, y) in bg-plate pixel coords, or None if the ball is
-                   not detected.
+        find_ball: callable accepting an Images namedtuple and returning
+                   (x, y) in background-plate pixel space, or None to abstain.
 
     Returns:
-        RMS error in pixels over all frames. Abstentions contribute ABSTAIN_ERROR
-        and detections are capped at MAX_ERROR, so abstaining is always preferred
-        to a bad detection.
+        RMS error in pixels.
 
     Raises:
         ValueError: if truth.json is empty.
