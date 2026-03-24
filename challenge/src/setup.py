@@ -90,6 +90,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -179,6 +180,13 @@ def calculate_metric(
     truth = load_truth()
     if not truth:
         raise ValueError("truth.json is empty — nothing to evaluate.")
+
+    # Shuffle so that find_ball cannot exploit call order to build a
+    # sequence-based lookup table. A fresh shuffle every run also means
+    # repeated runs give independent samples, which is useful for spotting
+    # detectors that are sensitive to evaluation order.
+    truth = list(truth)
+    random.shuffle(truth)
 
     squared_errors: list[float] = []
     n_abstained = 0
