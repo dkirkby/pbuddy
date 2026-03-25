@@ -33,7 +33,7 @@ From this directory:
 
     python detect.py
 
-This calls calculate_metric(find_ball) from setup.py and prints the RMS error.
+This calls calculate_metric(find_ball) from setup.py and prints a summary.
 """
 
 from __future__ import annotations
@@ -237,5 +237,4 @@ def find_ball(images: Images) -> tuple[float, float] | None:
 
 if __name__ == "__main__":
     import setup
-    rms = setup.calculate_metric(find_ball)
-    print(f"RMS error: {rms:.2f} px  (ABSTAIN_ERROR = {setup.ABSTAIN_ERROR} px)")
+    setup.calculate_metric(find_ball)

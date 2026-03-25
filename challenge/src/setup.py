@@ -91,6 +91,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import time
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -190,6 +191,7 @@ def calculate_metric(
 
     squared_errors: list[float] = []
     n_abstained = 0
+    t_start = time.monotonic()
 
     for det in truth:
         images = load_images(det.frame)
@@ -207,7 +209,13 @@ def calculate_metric(
             dy = result[1] - det.y
             squared_errors.append(min(dx * dx + dy * dy, float(MAX_ERROR ** 2)))
 
-    if n_abstained:
-        print(f"Abstained on {n_abstained}/{len(truth)} frames.")
+    elapsed = time.monotonic() - t_start
+    rms = math.sqrt(sum(squared_errors) / len(squared_errors))
+    n_detected = len(truth) - n_abstained
 
-    return math.sqrt(sum(squared_errors) / len(squared_errors))
+    print(f"---")
+    print(f"metric:     {rms:.1f}")
+    print(f"time:       {elapsed:.1f}")
+    print(f"ndetect:    {n_detected}")
+
+    return rms

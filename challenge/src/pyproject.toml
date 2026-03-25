@@ -1,0 +1,8 @@
+[project]
+name = "pbuddy-challenge"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+]

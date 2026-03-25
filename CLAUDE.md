@@ -101,9 +101,9 @@ data/projects/<project_id>/
 ### SQLite Schema (core tables)
 
 - `projects` — project metadata, video info
-- `passes` — per-project/pass state machine (pending → running → awaiting_review → accepted)
-- `jobs` — async job queue (queued → running → succeeded/failed)
-- `artifacts` — registry with roles: raw, correction, accepted
+- `passes` — per-project/pass state machine: `not_started → queued → running → produced_raw_output → waiting_for_user → accepted` (also `failed`, `cancelled`, `cancel_requested`)
+- `jobs` — async job queue: `queued → running → succeeded/failed` (also `cancelled`, `cancel_requested`)
+- `artifacts` — registry with roles: `raw`, `correction`, `accepted`, `preview`, `export`
 - `events` — append-only log for WebSocket progress streaming
 
 ### Test Structure
@@ -115,12 +115,25 @@ Tests are organized in three tiers under `tests/`: `unit/` (fast, isolated), `in
 REST for durable state; WebSocket (`/ws/projects/{id}`) for live progress. Core REST endpoints:
 
 ```
+GET    /api/projects
 POST   /api/projects
+GET    /api/projects/{id}
 POST   /api/projects/{id}/video
 POST   /api/projects/{id}/passes/{pass}/run
 PUT    /api/projects/{id}/passes/{pass}/corrections
 POST   /api/projects/{id}/passes/{pass}/accept
 ```
+
+### Frontend Pages
+
+- `ProjectListPage` — list/create projects
+- `ProjectHome` — project detail, pass state controls, workflow entry point
+- `Pass1Page` — court geometry editor (SVG overlay on background plate)
+- `Pass2Page` — ball annotation tool (frame scrubbing + point placement)
+
+### Challenge Dataset
+
+`challenge/` contains a standalone ball detection benchmark: 874 labelled frame images with `data/truth.json` ground truth annotations. `challenge/src/detect.py` is the detector under development; `challenge/src/setup.py` builds the dataset. Run with `uv run python challenge/src/detect.py`. Passes 3 and 4 are currently stubs.
 
 ## Key Design Principles
 
