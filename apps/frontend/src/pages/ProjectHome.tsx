@@ -72,11 +72,17 @@ export default function ProjectHome() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
   })
 
+  const runPass4 = useMutation({
+    mutationFn: () => api.runPass4(projectId!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+  })
+
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
   const pass2 = project.passes.find((p) => p.pass_name === 'pass2')
   const pass3 = project.passes.find((p) => p.pass_name === 'pass3')
+  const pass4 = project.passes.find((p) => p.pass_name === 'pass4')
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -280,15 +286,64 @@ export default function ProjectHome() {
         </div>
       </div>
 
-      {/* Pass 4: not yet implemented */}
+      {/* Pass 4 card */}
       <div style={{
-        border: '1px solid #eee', borderRadius: 8, padding: 16, marginBottom: 16,
+        border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
         opacity: pass3?.state === 'accepted' ? 1 : 0.4,
       }}>
-        <h2 style={{ margin: 0 }}>Pass 4 — 3D Reconstruction</h2>
-        <p style={{ color: '#888', fontSize: 14, margin: '8px 0 0' }}>
-          {pass3?.state !== 'accepted' ? 'Complete Pass 3 first.' : 'Not yet implemented.'}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>Pass 4 — Ball Detection</h2>
+          <span style={{ color: STATE_COLOR[pass4?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
+            {STATE_LABELS[pass4?.state ?? 'not_started']}
+          </span>
+        </div>
+        <p style={{ color: '#555', fontSize: 14 }}>
+          Detects ball candidates in each frame using motion, color, and silhouette masks.
         </p>
+
+        {progress && (pass4?.state === 'running' || pass4?.state === 'queued') && (
+          <div style={{ margin: '8px 0' }}>
+            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
+              <div style={{
+                width: `${Math.round(progress.fraction * 100)}%`,
+                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
+              }} />
+            </div>
+            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
+              {progress.stage} — {Math.round(progress.fraction * 100)}%
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          {pass3?.state === 'accepted' && (pass4?.state === 'not_started' || pass4?.state === 'failed') && (
+            <button
+              onClick={() => runPass4.mutate()}
+              disabled={runPass4.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer' }}
+            >
+              {runPass4.isPending ? 'Queuing…' : 'Run Pass 4'}
+            </button>
+          )}
+          {pass4?.state === 'waiting_for_user' && (
+            <span style={{ color: '#0a0' }}>✓ Ready for review (not yet implemented)</span>
+          )}
+          {pass4?.state === 'accepted' && (
+            <span style={{ color: '#090' }}>✓ Accepted</span>
+          )}
+          {(pass4?.state === 'waiting_for_user' || pass4?.state === 'accepted') && pass3?.state === 'accepted' && (
+            <button
+              onClick={() => runPass4.mutate()}
+              disabled={runPass4.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+            >
+              {runPass4.isPending ? 'Queuing…' : 'Re-run'}
+            </button>
+          )}
+          {pass3?.state !== 'accepted' && (
+            <span style={{ color: '#aaa', fontSize: 14 }}>Complete Pass 3 first.</span>
+          )}
+        </div>
       </div>
     </div>
   )

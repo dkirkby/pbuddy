@@ -75,6 +75,7 @@ interface PlotEditorProps {
 
 function PlotEditor({ imageUrl, mapping, vertices, onChange }: PlotEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null)
+  const divRef = useRef<HTMLDivElement>(null)
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null)
   const dragIdx = useRef<number | null>(null)
 
@@ -106,6 +107,7 @@ function PlotEditor({ imageUrl, mapping, vertices, onChange }: PlotEditorProps) 
           dragIdx.current = i + 1
           setSelectedIdx(i + 1)
           svgRef.current!.setPointerCapture(e.pointerId)
+          divRef.current?.focus()
           return
         }
       }
@@ -115,6 +117,7 @@ function PlotEditor({ imageUrl, mapping, vertices, onChange }: PlotEditorProps) 
     dragIdx.current = vertices.length
     setSelectedIdx(vertices.length)
     svgRef.current!.setPointerCapture(e.pointerId)
+    divRef.current?.focus()
   }, [vertices, mapping, onChange, toSVGPoint])
 
   const onVertexDown = useCallback((e: React.PointerEvent<SVGCircleElement>, idx: number) => {
@@ -123,6 +126,7 @@ function PlotEditor({ imageUrl, mapping, vertices, onChange }: PlotEditorProps) 
     dragIdx.current = idx
     setSelectedIdx(idx)
     svgRef.current!.setPointerCapture(e.pointerId)
+    divRef.current?.focus()
   }, [])
 
   const onSVGMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
@@ -146,6 +150,7 @@ function PlotEditor({ imageUrl, mapping, vertices, onChange }: PlotEditorProps) 
 
   return (
     <div
+      ref={divRef}
       tabIndex={0}
       onKeyDown={onKeyDown}
       style={{ position: 'relative', display: 'inline-block', outline: 'none' }}
@@ -172,7 +177,7 @@ function PlotEditor({ imageUrl, mapping, vertices, onChange }: PlotEditorProps) 
           <circle
             key={i}
             cx={v.x} cy={v.y} r={VERTEX_RADIUS}
-            fill={i === selectedIdx ? '#ff0' : 'rgba(255,255,255,0.2)'}
+            fill={i === selectedIdx ? '#444' : 'rgba(0,0,0,0.25)'}
             stroke="#333" strokeWidth={2}
             style={{ cursor: 'grab' }}
             onPointerDown={(e) => onVertexDown(e, i)}

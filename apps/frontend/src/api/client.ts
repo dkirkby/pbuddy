@@ -74,6 +74,9 @@ export const api = {
   runPass3: (projectId: string) =>
     post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass3/run`),
 
+  runPass4: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass4/run`),
+
   getPass3PlotMapping: (projectId: string, stem: string) =>
     get<Record<string, number>>(`/api/projects/${projectId}/passes/pass3/raw/${stem}.json`),
 
