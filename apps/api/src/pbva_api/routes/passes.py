@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/projects", tags=["passes"])
 _RUN_RESETS_STATUS: dict[str, ProjectStatus] = {
     "pass1": ProjectStatus.pass1_ready,
     "pass2": ProjectStatus.pass1_accepted,
+    "pass3": ProjectStatus.pass2_accepted,
 }
 
 

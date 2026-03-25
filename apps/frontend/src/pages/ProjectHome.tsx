@@ -67,10 +67,16 @@ export default function ProjectHome() {
     },
   })
 
+  const runPass3 = useMutation({
+    mutationFn: () => api.runPass3(projectId!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+  })
+
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
   const pass2 = project.passes.find((p) => p.pass_name === 'pass2')
+  const pass3 = project.passes.find((p) => p.pass_name === 'pass3')
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -209,23 +215,76 @@ export default function ProjectHome() {
         </div>
       </div>
 
-      {/* Passes 3–4: locked until pass2 accepted */}
-      {(['pass3', 'pass4'] as const).map((pn, i) => (
-        <div
-          key={pn}
-          style={{
-            border: '1px solid #eee', borderRadius: 8, padding: 16, marginBottom: 16,
-            opacity: pass2?.state === 'accepted' ? 1 : 0.4,
-          }}
-        >
-          <h2 style={{ margin: 0 }}>
-            Pass {i + 3} — {['Player & Ball Tracking', '3D Reconstruction'][i]}
-          </h2>
-          <p style={{ color: '#888', fontSize: 14, margin: '8px 0 0' }}>
-            {pass2?.state !== 'accepted' ? 'Complete Pass 2 first.' : 'Not yet implemented.'}
-          </p>
+      {/* Pass 3 card */}
+      <div style={{
+        border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
+        opacity: pass2?.state === 'accepted' ? 1 : 0.4,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>Pass 3 — Ball Color Tagging</h2>
+          <span style={{ color: STATE_COLOR[pass3?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
+            {STATE_LABELS[pass3?.state ?? 'not_started']}
+          </span>
         </div>
-      ))}
+        <p style={{ color: '#555', fontSize: 14 }}>
+          Samples per-pixel color data from annotated ball patches to build a ball color profile.
+        </p>
+
+        {progress && (pass3?.state === 'running' || pass3?.state === 'queued') && (
+          <div style={{ margin: '8px 0' }}>
+            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
+              <div style={{
+                width: `${Math.round(progress.fraction * 100)}%`,
+                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
+              }} />
+            </div>
+            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
+              {progress.stage} — {Math.round(progress.fraction * 100)}%
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          {pass2?.state === 'accepted' && (pass3?.state === 'not_started' || pass3?.state === 'failed') && (
+            <button
+              onClick={() => runPass3.mutate()}
+              disabled={runPass3.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer' }}
+            >
+              {runPass3.isPending ? 'Queuing…' : 'Run Pass 3'}
+            </button>
+          )}
+          {pass3?.state === 'waiting_for_user' && (
+            <span style={{ color: '#0a0' }}>✓ Ready for review (not yet implemented)</span>
+          )}
+          {pass3?.state === 'accepted' && (
+            <span style={{ color: '#090' }}>✓ Accepted</span>
+          )}
+          {(pass3?.state === 'waiting_for_user' || pass3?.state === 'accepted') && pass2?.state === 'accepted' && (
+            <button
+              onClick={() => runPass3.mutate()}
+              disabled={runPass3.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+            >
+              {runPass3.isPending ? 'Queuing…' : 'Re-run'}
+            </button>
+          )}
+          {pass2?.state !== 'accepted' && (
+            <span style={{ color: '#aaa', fontSize: 14 }}>Complete Pass 2 first.</span>
+          )}
+        </div>
+      </div>
+
+      {/* Pass 4: not yet implemented */}
+      <div style={{
+        border: '1px solid #eee', borderRadius: 8, padding: 16, marginBottom: 16,
+        opacity: pass3?.state === 'accepted' ? 1 : 0.4,
+      }}>
+        <h2 style={{ margin: 0 }}>Pass 4 — 3D Reconstruction</h2>
+        <p style={{ color: '#888', fontSize: 14, margin: '8px 0 0' }}>
+          {pass3?.state !== 'accepted' ? 'Complete Pass 3 first.' : 'Not yet implemented.'}
+        </p>
+      </div>
     </div>
   )
 }

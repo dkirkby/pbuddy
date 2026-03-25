@@ -71,6 +71,9 @@ export const api = {
   runPass2: (projectId: string) =>
     post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass2/run`),
 
+  runPass3: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass3/run`),
+
   getPass2Artifacts: (projectId: string) =>
     get<{ ok: boolean; data: ArtifactRef[] }>(`/api/projects/${projectId}/passes/pass2/artifacts`),
 
