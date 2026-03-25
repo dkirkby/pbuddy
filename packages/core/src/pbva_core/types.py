@@ -143,6 +143,8 @@ class Pass2RawResult(BaseModel):
 class Pass2CorrectionPayload(BaseModel):
     # frame_index (as string) -> ball centre in bg-plate pixel space
     annotations: dict[str, BallAnnotation] = {}
+    min_ball_radius: int = 4
+    max_ball_radius: int = 16
 
 
 class Pass2AcceptedOutput(BaseModel):
@@ -150,3 +152,5 @@ class Pass2AcceptedOutput(BaseModel):
     bg_width: int
     bg_height: int
     annotation_count: int
+    min_ball_radius: int
+    max_ball_radius: int

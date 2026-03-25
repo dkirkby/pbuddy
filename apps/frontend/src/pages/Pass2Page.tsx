@@ -27,6 +27,8 @@ export default function Pass2Page() {
   const [annotations, setAnnotations] = useState<Record<string, BallAnnotation>>({})
   const [patches, setPatches] = useState<Record<string, string>>({})
   const [patchOrder, setPatchOrder] = useState<string[]>([])
+  const [minBallRadius, setMinBallRadius] = useState(4)
+  const [maxBallRadius, setMaxBallRadius] = useState(16)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -88,6 +90,8 @@ export default function Pass2Page() {
         Object.keys(correctionsResp.data.patches).sort((a, b) => parseInt(b) - parseInt(a))
       )
     }
+    setMinBallRadius(correctionsResp.data.min_ball_radius ?? 4)
+    setMaxBallRadius(correctionsResp.data.max_ball_radius ?? 16)
     setDirty(false)
   }, [correctionsResp])
 
@@ -127,7 +131,7 @@ export default function Pass2Page() {
     setSaving(true)
     setStatusMsg(null)
     try {
-      await api.savePass2Annotations(projectId!, annotations, patches)
+      await api.savePass2Annotations(projectId!, annotations, patches, minBallRadius, maxBallRadius)
       setDirty(false)
       qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
       setStatusMsg('Saved.')
@@ -192,6 +196,29 @@ export default function Pass2Page() {
             </p>
           )}
         </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 24, alignItems: 'center', margin: '0 0 8px', fontSize: 13 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          Min ball radius (px):
+          <input
+            type="number"
+            min={2} max={32}
+            value={minBallRadius}
+            onChange={(e) => { setMinBallRadius(Math.max(2, Math.min(32, parseInt(e.target.value) || 2))); setDirty(true) }}
+            style={{ width: 52, padding: '2px 4px' }}
+          />
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          Max ball radius (px):
+          <input
+            type="number"
+            min={2} max={32}
+            value={maxBallRadius}
+            onChange={(e) => { setMaxBallRadius(Math.max(2, Math.min(32, parseInt(e.target.value) || 2))); setDirty(true) }}
+            style={{ width: 52, padding: '2px 4px' }}
+          />
+        </label>
       </div>
 
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>

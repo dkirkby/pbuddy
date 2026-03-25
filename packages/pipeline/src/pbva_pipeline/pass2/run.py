@@ -67,9 +67,10 @@ class Pass2:
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
 
-        shutil.copy2(ctx.paths.pass_raw_dir / "result.json", accepted_dir / "result.json")
-
         annotations = corrections.annotations if corrections else {}
+        min_r = corrections.min_ball_radius if corrections else 4
+        max_r = corrections.max_ball_radius if corrections else 16
+
         ann_data = {k: {"x": v.x, "y": v.y} for k, v in annotations.items()}
         (accepted_dir / "annotations.json").write_text(
             json.dumps({"annotations": ann_data}, indent=2)
@@ -106,9 +107,13 @@ class Pass2:
                 if bg_crop.shape == raw_patch.shape:
                     cv2.imwrite(str(bg_sub_dst / src_png.name), cv2.absdiff(raw_patch, bg_crop))
 
-        return Pass2AcceptedOutput(
+        accepted = Pass2AcceptedOutput(
             fps=raw_result.fps,
             bg_width=raw_result.bg_width,
             bg_height=raw_result.bg_height,
             annotation_count=len(annotations),
+            min_ball_radius=min_r,
+            max_ball_radius=max_r,
         )
+        (accepted_dir / "result.json").write_text(accepted.model_dump_json(indent=2))
+        return accepted
