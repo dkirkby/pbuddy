@@ -11,6 +11,17 @@ const PATCH_RADIUS = BALL_PATCH_RADIUS
 const PATCH_DISPLAY_ZOOM = 2
 const PATCH_DISPLAY_SIZE = PATCH_RADIUS * 2 * PATCH_DISPLAY_ZOOM  // 128 px
 
+function RadiusOverlay({ minR, maxR }: { minR: number; maxR: number }) {
+  const c = PATCH_DISPLAY_SIZE / 2
+  return (
+    <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+         width={PATCH_DISPLAY_SIZE} height={PATCH_DISPLAY_SIZE}>
+      <circle cx={c} cy={c} r={minR * PATCH_DISPLAY_ZOOM} fill="none" stroke="rgba(0,220,255,0.75)" strokeWidth={1} />
+      <circle cx={c} cy={c} r={maxR * PATCH_DISPLAY_ZOOM} fill="none" stroke="rgba(0,220,255,0.75)" strokeWidth={1} />
+    </svg>
+  )
+}
+
 interface Pass1AcceptedOutput {
   court_geometry: CourtGeometry
   bg_width: number
@@ -259,16 +270,19 @@ export default function Pass2Page() {
           padding: '4px', background: '#111', borderRadius: 4, alignItems: 'flex-start',
         }}>
           {/* Live preview canvas — updated by VideoPlayer rAF loop on mouse move */}
-          <canvas
-            ref={previewRef}
-            width={PATCH_RADIUS * 2}
-            height={PATCH_RADIUS * 2}
-            style={{
-              flexShrink: 0, display: 'block',
-              width: PATCH_DISPLAY_SIZE, height: PATCH_DISPLAY_SIZE,
-              imageRendering: 'pixelated',
-            }}
-          />
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <canvas
+              ref={previewRef}
+              width={PATCH_RADIUS * 2}
+              height={PATCH_RADIUS * 2}
+              style={{
+                display: 'block',
+                width: PATCH_DISPLAY_SIZE, height: PATCH_DISPLAY_SIZE,
+                imageRendering: 'pixelated',
+              }}
+            />
+            <RadiusOverlay minR={minBallRadius} maxR={maxBallRadius} />
+          </div>
           {patchOrder.length > 0 && (
             <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
           )}
@@ -288,6 +302,7 @@ export default function Pass2Page() {
                   imageRendering: 'pixelated',
                 }}
               />
+              <RadiusOverlay minR={minBallRadius} maxR={maxBallRadius} />
               {/* Centering crosshair */}
               <div style={{
                 position: 'absolute', top: '50%', left: 0, right: 0,
