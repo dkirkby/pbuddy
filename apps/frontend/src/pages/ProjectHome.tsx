@@ -255,7 +255,12 @@ export default function ProjectHome() {
             </button>
           )}
           {pass3?.state === 'waiting_for_user' && (
-            <span style={{ color: '#0a0' }}>✓ Ready for review (not yet implemented)</span>
+            <button
+              onClick={() => navigate(`/projects/${projectId}/pass3`)}
+              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
+            >
+              Review →
+            </button>
           )}
           {pass3?.state === 'accepted' && (
             <span style={{ color: '#090' }}>✓ Accepted</span>

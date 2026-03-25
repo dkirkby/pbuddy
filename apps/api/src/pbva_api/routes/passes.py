@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,7 +20,7 @@ from pbva_core.types import (
     PassStatusSummary,
 )
 
-from pbva_db.models import Artifact, Job, Pass, Project
+from pbva_db.models import Artifact, Event, Job, Pass, Project
 from pbva_api.dependencies import get_db, get_settings
 
 
@@ -498,7 +499,6 @@ def accept_pass2(
     project.status = ProjectStatus.pass2_accepted.value
     project.updated_at = _utcnow()
 
-    from pbva_db.models import Event
     db.add(Event(
         project_id=project_id,
         event_type="pass_accepted",
@@ -507,3 +507,150 @@ def accept_pass2(
     db.commit()
 
     return {"ok": True, "data": accepted.model_dump(mode="json")}
+
+
+# ---------------------------------------------------------------------------
+# Pass 3 — Ball Color Tagging
+# ---------------------------------------------------------------------------
+
+_PASS3_MIME = {"png": "image/png", "json": "application/json", "csv": "text/csv"}
+
+
+@router.get("/{project_id}/passes/pass3/raw/{filename}")
+def get_pass3_raw_file(
+    project_id: str,
+    filename: str,
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass3")
+    path = (raw_dir / filename).resolve()
+    try:
+        path.relative_to(raw_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    suffix = path.suffix.lstrip(".")
+    if suffix == "json":
+        return JSONResponse(content=json.loads(path.read_text()))
+    return FileResponse(str(path), media_type=_PASS3_MIME.get(suffix, "application/octet-stream"))
+
+
+@router.get("/{project_id}/passes/pass3/corrections")
+def get_pass3_corrections(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    _get_pass_or_404(db, project_id, "pass3")
+    from pbva_core import paths as p
+    poly_path = p.pass_corrections_dir(settings.data_root, project_id, "pass3") / "ball_color_polygons.json"
+    if not poly_path.exists():
+        return {"ok": True, "data": None}
+    return {"ok": True, "data": json.loads(poly_path.read_text())}
+
+
+@router.put("/{project_id}/passes/pass3/corrections")
+def save_pass3_corrections(
+    project_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass3")
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
+        raise HTTPException(status_code=409, detail=f"Pass 3 is in state '{pass_row.state}'")
+
+    from pbva_pipeline.pass3.run import Pass3
+    corrections = Pass3().validate_corrections(body)
+
+    from pbva_core import paths as p
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass3")
+    corrections_dir.mkdir(parents=True, exist_ok=True)
+    poly_path = corrections_dir / "ball_color_polygons.json"
+    poly_path.write_text(json.dumps(corrections, indent=2))
+
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass3",
+        artifact_role=ArtifactRole.correction.value,
+        artifact_type="json",
+        path=str(poly_path),
+    ))
+    pass_row.latest_correction_id = art_id
+    pass_row.updated_at = _utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/{project_id}/passes/pass3/accept")
+def accept_pass3(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass3")
+    if pass_row.state != PassState.waiting_for_user.value:
+        raise HTTPException(status_code=409, detail=f"Pass 3 is in state '{pass_row.state}', cannot accept")
+
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass3")
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass3")
+    accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass3")
+    accepted_dir.mkdir(parents=True, exist_ok=True)
+
+    poly_path = corrections_dir / "ball_color_polygons.json"
+    corrections = json.loads(poly_path.read_text()) if poly_path.exists() else None
+
+    from pbva_pipeline.pass3.run import Pass3
+    from pbva_pipeline.base import NullProgress, PassPaths, PassContext
+
+    project = db.get(Project, project_id)
+    ctx = PassContext(
+        project_id=project_id,
+        project_name=project.name,
+        video_path=p.project_root(settings.data_root, project_id) / "uploads" / "original.mp4",
+        video_duration_s=project.video_duration_s or 0.0,
+        video_fps=project.video_fps or 30.0,
+        video_width=project.video_width or 1920,
+        video_height=project.video_height or 1080,
+        paths=PassPaths(
+            project_root=p.project_root(settings.data_root, project_id),
+            uploads_dir=p.uploads_dir(settings.data_root, project_id),
+            derived_dir=p.derived_dir(settings.data_root, project_id),
+            pass_raw_dir=raw_dir,
+            pass_corrections_dir=corrections_dir,
+            pass_accepted_dir=accepted_dir,
+        ),
+        settings=settings,
+        job_id=pass_row.current_job_id or "",
+        progress=NullProgress(),
+    )
+    Pass3().build_accepted_output(ctx, {}, corrections)
+
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass3",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="json",
+        path=str(accepted_dir / "ball_color_polygons.json"),
+    ))
+    pass_row.state = PassState.accepted.value
+    pass_row.latest_accepted_artifact_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    project.status = ProjectStatus.pass3_accepted.value
+    project.updated_at = _utcnow()
+
+    db.add(Event(
+        project_id=project_id,
+        event_type="pass_accepted",
+        payload_json=json.dumps({"pass_name": "pass3"}),
+    ))
+    db.commit()
+    return {"ok": True}

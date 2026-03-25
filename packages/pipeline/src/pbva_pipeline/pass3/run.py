@@ -208,11 +208,17 @@ class Pass3:
         return artifacts
 
     def validate_corrections(self, payload: dict) -> dict:
-        # Review/accept workflow not yet defined.
+        for key in ("hue_saturation", "value_saturation"):
+            verts = payload.get(key, [])
+            if not isinstance(verts, list):
+                raise ValueError(f"{key} must be a list")
+            for v in verts:
+                if not (isinstance(v, list) and len(v) == 2
+                        and all(isinstance(c, (int, float)) for c in v)):
+                    raise ValueError(f"{key} vertices must be [x, y] numeric pairs")
         return payload
 
     def build_accepted_output(self, ctx: PassContext, raw_result: dict, corrections: dict | None) -> dict:
-        # Review/accept workflow not yet defined — accepted output is the raw CSV.
         import shutil
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
@@ -222,4 +228,8 @@ class Pass3:
             src = ctx.paths.pass_raw_dir / name
             if src.exists():
                 shutil.copy2(src, accepted_dir / name)
+        if corrections:
+            (accepted_dir / "ball_color_polygons.json").write_text(
+                json.dumps(corrections, indent=2)
+            )
         return raw_result
