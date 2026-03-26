@@ -59,7 +59,8 @@ export default function Pass4Page() {
 
   const totalDetections = detectionsData?.detection_count ?? 0
   const isPaused = detectionsData && 'paused' in detectionsData && (detectionsData as any).paused === true
-  const frameDets = (ballDetections[currentFrame] ?? []).slice().sort((a, b) => b.radius - a.radius)
+  // Subtract 1 to match the -1 offset applied in VideoPlayer's ballDetections overlay lookup.
+  const frameDets = (ballDetections[currentFrame - 1] ?? []).slice().sort((a, b) => b.radius - a.radius)
 
   // Circularity: 4π·area / perimeter²; perfect circle = 1.0
   function circularity(d: BallDetection): string {
