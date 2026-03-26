@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -50,6 +51,9 @@ class Pass4:
         bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
         if not bg_path.exists():
             raise FileNotFoundError(f"Median background not found: {bg_path}")
+        p2_result = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json"
+        if not p2_result.exists():
+            raise FileNotFoundError("Pass 2 accepted result.json not found")
         poly_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "ball_color_polygons.json"
         if not poly_path.exists():
             raise FileNotFoundError("Pass 3 ball_color_polygons.json not found — accept Pass 3 first")
@@ -71,6 +75,13 @@ class Pass4:
         bg_plate = cv2.imread(str(pass1_dir / "raw" / "median_background.png"))
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
         bg_blur   = cv2.medianBlur(bg_plate, 5)
+
+        progress.update(0.05, "setup", "Loading max ball radius from pass 2…")
+        p2_result = json.loads(
+            (ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json").read_text()
+        )
+        max_ball_radius = p2_result.get("max_ball_radius", 16)
+        min_blob_radius = p2_result.get("min_ball_radius", 4) / 2
 
         progress.update(0.06, "setup", "Building color lookup tables from pass 3 polygons…")
         poly_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "ball_color_polygons.json"
@@ -96,13 +107,40 @@ class Pass4:
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
 
+        pause_file = raw_dir / ".pause"
         stable_frame_count = 0
+        detections = []
+
         for i in range(total_frames):
             ret, frame = cap.read()
             if not ret:
                 break
 
-            frame_idx = in_frame + i
+            # Use the actual post-read position to determine which frame was
+            # just decoded.  After cap.read(), CAP_PROP_POS_FRAMES points to
+            # the *next* frame, so the frame we hold is one behind that.
+            frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+
+            # Check for pause signal every 30 frames (~1 s at 30 fps).
+            if i % 30 == 0 and pause_file.exists():
+                current_fraction = 0.1 + 0.88 * i / total_frames
+                # Write partial results so the UI can show them while paused.
+                (raw_dir / "detections.json").write_text(json.dumps({
+                    "stable_frame_count": stable_frame_count,
+                    "first_stable_frame": in_frame,
+                    "last_stable_frame":  frame_idx - 1,
+                    "max_ball_radius":    max_ball_radius,
+                    "detection_count":    len(detections),
+                    "detections":         detections,
+                    "paused":             True,
+                }, indent=2))
+                while pause_file.exists():
+                    progress.update(
+                        current_fraction, "paused",
+                        f"Paused at frame {frame_idx} — {len(detections)} detections so far",
+                    )
+                    time.sleep(1.0)
+
             if i % 150 == 0:
                 progress.update(
                     0.1 + 0.88 * i / total_frames,
@@ -124,20 +162,37 @@ class Pass4:
             combined = cv2.bitwise_and(motion_mask, color_mask)
             combined = cv2.bitwise_and(combined, tent_mask)
 
+            # --- Blob detection ---
+            contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for contour in contours:
+                (cx, cy), radius = cv2.minEnclosingCircle(contour)
+                if min_blob_radius <= radius <= max_ball_radius:
+                    area = cv2.contourArea(contour)
+                    perimeter = cv2.arcLength(contour, closed=True)
+                    detections.append({
+                        "frame": frame_idx,
+                        "cx": round(float(cx), 1),
+                        "cy": round(float(cy), 1),
+                        "radius": round(float(radius), 1),
+                        "area": round(area, 1),
+                        "perimeter": round(perimeter, 1),
+                    })
+
             stable_frame_count += 1
 
         cap.release()
 
-        # Placeholder detections output — per-frame ball detections not yet implemented.
         result = {
             "stable_frame_count": stable_frame_count,
             "first_stable_frame": in_frame,
             "last_stable_frame":  in_frame + stable_frame_count - 1,
-            "detections": [],
+            "max_ball_radius":    max_ball_radius,
+            "detection_count":    len(detections),
+            "detections":         detections,
         }
         (raw_dir / "detections.json").write_text(json.dumps(result, indent=2))
 
-        progress.update(1.0, "done", f"Processed {stable_frame_count} frames")
+        progress.update(1.0, "done", f"Found {len(detections)} candidates in {stable_frame_count} frames")
         return result
 
     def write_raw_outputs(self, ctx: PassContext, result: dict) -> list[dict]:

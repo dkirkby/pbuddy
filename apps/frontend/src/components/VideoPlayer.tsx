@@ -18,6 +18,10 @@ interface Detection {
   area: number; bbox_x: number; bbox_y: number; bbox_w: number; bbox_h: number
 }
 
+interface BallDetection {
+  cx: number; cy: number; radius: number
+}
+
 // ─── Court geometry helpers ──────────────────────────────────────────────────
 
 const KV = COURT_KV
@@ -81,10 +85,12 @@ interface Props {
   bgWidth: number
   bgHeight: number
   detections?: Record<number, Detection[]>
+  ballDetections?: Record<number, BallDetection[]>
   courtGeometry?: CourtGeometry
   totalFrames: number
   annotations?: Record<number, BallAnnotation>
   onVideoClick?: (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null) => void
+  onFrameChange?: (frameIndex: number) => void
   ballCount?: number
   storageKey?: string
   previewCanvasRef?: React.RefObject<HTMLCanvasElement>
@@ -94,8 +100,8 @@ interface Props {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
-  videoUrl, fps, bgWidth, bgHeight, detections, courtGeometry, totalFrames,
-  annotations, onVideoClick, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
+  videoUrl, fps, bgWidth, bgHeight, detections, ballDetections, courtGeometry, totalFrames,
+  annotations, onVideoClick, onFrameChange, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -124,7 +130,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const fpsRef = useRef(fps)
   const isSeekingRef = useRef(false)
   const reverseRafRef = useRef<number | null>(null)   // rAF id for fast-reverse seek loop
-  const forwardRafRef = useRef<number | null>(null)   // rAF id for canvas-sync during forward play
+  const forwardRafRef = useRef<number | null>(null)   // rAF id for canvas-sync during forward play (fallback)
+  const vfcHandleRef  = useRef<number | null>(null)   // requestVideoFrameCallback handle
   const stepTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -172,7 +179,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   // ── Canvas drawing ──────────────────────────────────────────────────────────
 
-  const drawOverlay = useCallback(() => {
+  // mediaTime: exact PTS from requestVideoFrameCallback; omit to read video.currentTime.
+  const drawOverlay = useCallback((mediaTime?: number) => {
     const video = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return
@@ -187,10 +195,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    const frameIndex = Math.round(video.currentTime * fps)
+    const t = mediaTime ?? video.currentTime
+    const frameIndex = Math.round(t * fps)
     const dets = detections ? (detections[frameIndex] ?? []) : []
-    setCurrentTime(video.currentTime)
+    setCurrentTime(t)
     setDetCount(dets.length)
+    onFrameChange?.(frameIndex)
 
     const sx = canvas.width / bgWidth
     const sy = canvas.height / bgHeight
@@ -206,6 +216,24 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         (det.angle * Math.PI) / 180, 0, 2 * Math.PI,
       )
       ctx.stroke()
+    }
+
+    // Draw pass4 ball detections: cyan for previous 8 frames, magenta for current frame.
+    // Subtract 1 to compensate for video PTS starting at 1/fps rather than 0, which causes
+    // Math.round(mediaTime * fps) to be 1 higher than OpenCV's 0-based frame counter.
+    if (ballDetections) {
+      for (let offset = 8; offset >= 0; offset--) {
+        const fi = frameIndex - offset - 1
+        const dets4 = ballDetections[fi]
+        if (!dets4) continue
+        ctx.strokeStyle = offset === 0 ? 'rgba(255, 0, 255, 0.9)' : 'rgba(0, 220, 255, 0.5)'
+        ctx.lineWidth = offset === 0 ? 2 : 1.5
+        for (const det of dets4) {
+          ctx.beginPath()
+          ctx.arc(det.cx * sx, det.cy * sy, 14, 0, 2 * Math.PI)
+          ctx.stroke()
+        }
+      }
     }
 
     // Draw ball annotation circles (current frame full opacity, ±5 frames faded).
@@ -267,7 +295,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         ctx.stroke()
       }
     }
-  }, [fps, bgWidth, bgHeight, detections, showCourt, showTent, courtGeometry, annotations])
+  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange])
 
   // Redraw whenever annotations or other overlay state changes (e.g. right after a click).
   useEffect(() => { drawOverlay() }, [drawOverlay])
@@ -291,7 +319,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     function stepBack() {
       if (!video || isSeekingRef.current) return
       isSeekingRef.current = true
-      video.currentTime = Math.max(0, video.currentTime - 2 / fpsRef.current)
+      const targetFrame = Math.round(video.currentTime * fpsRef.current) - 2
+      video.currentTime = Math.max(0, targetFrame / fpsRef.current)
     }
 
     function onSeeked() {
@@ -318,30 +347,50 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     }
   }, [drawOverlay])
 
-  // ── rAF canvas-sync loop during forward playback ────────────────────────────
+  // ── Canvas-sync loop during forward playback ────────────────────────────────
+  // Prefer requestVideoFrameCallback (fires once per displayed frame with exact
+  // PTS) over rAF (fires at screen refresh rate, currentTime between frames).
 
   useEffect(() => {
     const isForward = playbackState === 'playing' || playbackState === 'fast-forward'
-    if (!isForward) {
-      if (forwardRafRef.current !== null) {
-        cancelAnimationFrame(forwardRafRef.current)
-        forwardRafRef.current = null
+    const video = videoRef.current
+
+    const cancelAll = () => {
+      if (vfcHandleRef.current !== null && video) {
+        ;(video as any).cancelVideoFrameCallback(vfcHandleRef.current)
+        vfcHandleRef.current = null
       }
-      return
-    }
-    function tick() {
-      drawOverlay()
-      if (playbackStateRef.current === 'playing' || playbackStateRef.current === 'fast-forward') {
-        forwardRafRef.current = requestAnimationFrame(tick)
-      }
-    }
-    forwardRafRef.current = requestAnimationFrame(tick)
-    return () => {
       if (forwardRafRef.current !== null) {
         cancelAnimationFrame(forwardRafRef.current)
         forwardRafRef.current = null
       }
     }
+
+    if (!isForward || !video) { cancelAll(); return }
+
+    if ('requestVideoFrameCallback' in video) {
+      // rVFC path: metadata.mediaTime is the exact PTS of the frame being painted.
+      const vfcTick = (_now: number, metadata: { mediaTime: number }) => {
+        drawOverlay(metadata.mediaTime)
+        if (playbackStateRef.current === 'playing' || playbackStateRef.current === 'fast-forward') {
+          vfcHandleRef.current = (videoRef.current as any).requestVideoFrameCallback(vfcTick)
+        } else {
+          vfcHandleRef.current = null
+        }
+      }
+      vfcHandleRef.current = (video as any).requestVideoFrameCallback(vfcTick)
+    } else {
+      // rAF fallback for browsers without rVFC.
+      const tick = () => {
+        drawOverlay()
+        if (playbackStateRef.current === 'playing' || playbackStateRef.current === 'fast-forward') {
+          forwardRafRef.current = requestAnimationFrame(tick)
+        }
+      }
+      forwardRafRef.current = requestAnimationFrame(tick)
+    }
+
+    return cancelAll
   }, [playbackState, drawOverlay])
 
   // ── Drive the video element when playback state changes ────────────────────
@@ -371,7 +420,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       reverseRafRef.current = requestAnimationFrame(() => {
         if (!video || isSeekingRef.current) return
         isSeekingRef.current = true
-        video.currentTime = Math.max(0, video.currentTime - 2 / fpsRef.current)
+        const targetFrame = Math.round(video.currentTime * fpsRef.current) - 2
+        video.currentTime = Math.max(0, targetFrame / fpsRef.current)
       })
     } else {
       // stopped
@@ -404,7 +454,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     }
     const step = () => {
       const v = videoRef.current
-      if (v) v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta / fpsRef.current))
+      if (!v) return
+      // Compute from frame index to avoid accumulated floating-point error and
+      // to guarantee we always cross a frame boundary by exactly one frame.
+      const targetFrame = Math.round(v.currentTime * fpsRef.current) + delta
+      v.currentTime = Math.max(0, Math.min(v.duration, targetFrame / fpsRef.current))
     }
     step() // immediate
     // After 300 ms hold, repeat at ~30 steps/s.
@@ -678,17 +732,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           style={{ ...btnStyle, fontWeight: 'bold', background: showHelp ? '#ddf' : undefined }}
         >?</button>
 
-        {/* Court overlay toggle */}
-        <label style={{ marginLeft: 4, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
-          <input type="checkbox" checked={showCourt} onChange={(e) => setShowCourt(e.target.checked)} />
-          Court
-        </label>
-
-        {/* Tent (valid-ball volume) overlay toggle */}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
-          <input type="checkbox" checked={showTent} onChange={(e) => setShowTent(e.target.checked)} />
-          Tent
-        </label>
+        {/* Court and Tent overlays — only shown when court geometry is available */}
+        {courtGeometry && (<>
+          <label style={{ marginLeft: 4, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
+            <input type="checkbox" checked={showCourt} onChange={(e) => setShowCourt(e.target.checked)} />
+            Court
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
+            <input type="checkbox" checked={showTent} onChange={(e) => setShowTent(e.target.checked)} />
+            Tent
+          </label>
+        </>)}
 
         {/* Bg-sub toggle — only shown when a bg plate URL is available */}
         {bgPlateUrl && (
@@ -710,7 +764,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       <div style={{ marginTop: 6, fontSize: 13, color: '#555', display: 'flex', gap: 16 }}>
         <span>{fmtTime(currentTime)} / {fmtTime(duration)}</span>
         <span>Frame {frameIndex} / {totalFrames || Math.round(duration * fps)}</span>
-        <span>Detections: <strong>{detCount}</strong></span>
+        {detections && <span>Detections: <strong>{detCount}</strong></span>}
       </div>
 
       {/* Help panel */}

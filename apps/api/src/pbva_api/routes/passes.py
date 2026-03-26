@@ -64,6 +64,7 @@ def run_pass(
     project_id: str,
     pass_name: str,
     db: Session = Depends(get_db),
+    settings=Depends(get_settings),
 ):
     project = _get_project_or_404(db, project_id)
     pass_row = _get_pass_or_404(db, project_id, pass_name)
@@ -73,12 +74,19 @@ def run_pass(
         PassState.failed.value,
         PassState.waiting_for_user.value,
         PassState.accepted.value,
+        PassState.queued.value,    # allow re-run while paused (pass4)
+        PassState.running.value,   # allow re-run while running (pass4 paused mid-run)
     }
     if pass_row.state not in _VALID_RUN_STATES:
         raise HTTPException(
             status_code=409,
             detail=f"Pass {pass_name} cannot be run from state '{pass_row.state}'",
         )
+
+    # If pass4 is paused, remove the sentinel so the stalled job can finish
+    # and the worker can then pick up the new job.
+    if pass_name == "pass4":
+        _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
 
     # Create job.
     job_id = str(uuid.uuid4())
@@ -654,4 +662,61 @@ def accept_pass3(
         payload_json=json.dumps({"pass_name": "pass3"}),
     ))
     db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Pass 4 — Ball Detection: raw file access, pause / resume, accept
+# ---------------------------------------------------------------------------
+
+_PASS4_MIME = {"json": "application/json"}
+
+
+@router.get("/{project_id}/passes/pass4/raw/{filename}")
+def get_pass4_raw_file(
+    project_id: str,
+    filename: str,
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass4")
+    path = (raw_dir / filename).resolve()
+    try:
+        path.relative_to(raw_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    suffix = path.suffix.lstrip(".")
+    if suffix == "json":
+        return JSONResponse(content=json.loads(path.read_text()))
+    return FileResponse(str(path), media_type=_PASS4_MIME.get(suffix, "application/octet-stream"))
+
+def _pass4_pause_file(data_root, project_id: str) -> Path:
+    from pbva_core import paths as p
+    return p.pass_raw_dir(data_root, project_id, "pass4") / ".pause"
+
+
+@router.post("/{project_id}/passes/pass4/pause")
+def pause_pass4(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    _get_pass_or_404(db, project_id, "pass4")
+    pf = _pass4_pause_file(settings.data_root, project_id)
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.touch()
+    return {"ok": True}
+
+
+@router.post("/{project_id}/passes/pass4/resume")
+def resume_pass4(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    _get_pass_or_404(db, project_id, "pass4")
+    pf = _pass4_pause_file(settings.data_root, project_id)
+    pf.unlink(missing_ok=True)
     return {"ok": True}

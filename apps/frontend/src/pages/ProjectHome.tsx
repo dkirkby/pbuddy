@@ -74,7 +74,10 @@ export default function ProjectHome() {
 
   const runPass4 = useMutation({
     mutationFn: () => api.runPass4(projectId!),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+    onSuccess: () => {
+      setProgress(null)
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+    },
   })
 
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
@@ -312,6 +315,14 @@ export default function ProjectHome() {
             <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
               {progress.stage} — {Math.round(progress.fraction * 100)}%
             </div>
+            <button
+              onClick={() => progress.stage === 'paused'
+                ? api.resumePass4(projectId!)
+                : api.pausePass4(projectId!)}
+              style={{ marginTop: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}
+            >
+              {progress.stage === 'paused' ? 'Resume' : 'Pause'}
+            </button>
           </div>
         )}
 
@@ -325,13 +336,18 @@ export default function ProjectHome() {
               {runPass4.isPending ? 'Queuing…' : 'Run Pass 4'}
             </button>
           )}
-          {pass4?.state === 'waiting_for_user' && (
-            <span style={{ color: '#0a0' }}>✓ Ready for review (not yet implemented)</span>
+          {(pass4?.state === 'waiting_for_user' || progress?.stage === 'paused') && (
+            <button
+              onClick={() => navigate(`/projects/${projectId}/pass4`)}
+              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
+            >
+              Review →
+            </button>
           )}
           {pass4?.state === 'accepted' && (
             <span style={{ color: '#090' }}>✓ Accepted</span>
           )}
-          {(pass4?.state === 'waiting_for_user' || pass4?.state === 'accepted') && pass3?.state === 'accepted' && (
+          {(pass4?.state === 'waiting_for_user' || pass4?.state === 'accepted' || progress?.stage === 'paused') && pass3?.state === 'accepted' && (
             <button
               onClick={() => runPass4.mutate()}
               disabled={runPass4.isPending}

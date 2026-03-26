@@ -77,6 +77,17 @@ export const api = {
   runPass4: (projectId: string) =>
     post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass4/run`),
 
+  pausePass4: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass4/pause`),
+
+  resumePass4: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass4/resume`),
+
+  getPass4Detections: (projectId: string) =>
+    get<{ stable_frame_count: number; first_stable_frame: number; last_stable_frame: number; max_ball_radius: number; detection_count: number; detections: { frame: number; cx: number; cy: number; radius: number; area: number; perimeter: number }[] }>(
+      `/api/projects/${projectId}/passes/pass4/raw/detections.json`
+    ),
+
   getPass3PlotMapping: (projectId: string, stem: string) =>
     get<Record<string, number>>(`/api/projects/${projectId}/passes/pass3/raw/${stem}.json`),
 
