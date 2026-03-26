@@ -13,14 +13,13 @@ from pbva_core.types import Pass1AcceptedOutput
 from pbva_pipeline.base import PassContext
 
 
-def detect_motion(frame, bg_blur, blur=5, threshold=25, ksize=5):
+def detect_motion(frame, bg_blur, open_kernel, close_kernel, blur=5, threshold=25):
     frame_blur = cv2.medianBlur(frame, blur)
     diff = cv2.absdiff(frame_blur, bg_blur)
     motion = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
     _, moving = cv2.threshold(motion, threshold, 255, cv2.THRESH_BINARY)
-    kernel = np.ones((ksize, ksize), np.uint8)
-    cleaned = cv2.morphologyEx(moving, cv2.MORPH_OPEN, kernel)
-    solid = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+    cleaned = cv2.morphologyEx(moving,  cv2.MORPH_OPEN,  open_kernel)
+    solid   = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, close_kernel)
     return solid
 
 
@@ -81,7 +80,7 @@ class Pass4:
             (ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json").read_text()
         )
         max_ball_radius = p2_result.get("max_ball_radius", 16)
-        min_blob_radius = p2_result.get("min_ball_radius", 4) / 2
+        min_blob_radius = p2_result.get("min_ball_radius", 4) / 4
 
         progress.update(0.06, "setup", "Building color lookup tables from pass 3 polygons…")
         poly_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "ball_color_polygons.json"
@@ -108,6 +107,8 @@ class Pass4:
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         pause_file = raw_dir / ".pause"
+        open_kernel  = np.ones((5, 5), np.uint8)
+        close_kernel = np.ones((9, 9), np.uint8)
         stable_frame_count = 0
         detections = []
 
@@ -149,14 +150,16 @@ class Pass4:
                 )
 
             # --- Motion mask ---
-            motion_mask = detect_motion(frame, bg_blur)
+            motion_mask = detect_motion(frame, bg_blur, open_kernel, close_kernel)
 
             # --- Color mask ---
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             H = hsv[:, :, 0]   # 0-180
             S = hsv[:, :, 1]   # 0-255
             V = hsv[:, :, 2]   # 0-255
-            color_mask = ((hs_lut[S, H] > 0) & (vs_lut[S, V] > 0)).astype(np.uint8) * 255
+            color_raw = ((hs_lut[S, H] > 0) & (vs_lut[S, V] > 0)).astype(np.uint8) * 255
+            color_mask = cv2.morphologyEx(color_raw,  cv2.MORPH_OPEN,  open_kernel)
+            color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
 
             # --- Combined mask: motion AND color AND tent silhouette ---
             combined = cv2.bitwise_and(motion_mask, color_mask)
