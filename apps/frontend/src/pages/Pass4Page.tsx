@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
@@ -53,6 +53,36 @@ export default function Pass4Page() {
 
   const handleFrameChange = useCallback((fi: number) => setCurrentFrame(fi), [])
 
+  // Load detections_map.png and colorize: white → yellow/semi-transparent, black → transparent.
+  const [showDetectionsMap, setShowDetectionsMap] = useState(false)
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [overlayReady, setOverlayReady] = useState(false)
+
+  useEffect(() => {
+    if (!detectionsData) return
+    const img = new Image()
+    img.src = api.detectionsMapUrl(projectId!)
+    img.onload = () => {
+      const offscreen = document.createElement('canvas')
+      offscreen.width = img.naturalWidth
+      offscreen.height = img.naturalHeight
+      const octx = offscreen.getContext('2d')!
+      octx.drawImage(img, 0, 0)
+      const imageData = octx.getImageData(0, 0, offscreen.width, offscreen.height)
+      const d = imageData.data
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 128) {          // white pixel → yellow
+          d[i] = 255; d[i + 1] = 220; d[i + 2] = 0; d[i + 3] = 200
+        } else {                   // black pixel → transparent
+          d[i + 3] = 0
+        }
+      }
+      octx.putImageData(imageData, 0, 0)
+      overlayCanvasRef.current = offscreen
+      setOverlayReady(true)
+    }
+  }, [detectionsData, projectId])
+
   const fps = pass2Result.data?.fps ?? project?.video_fps ?? 30
   const bgWidth = pass2Result.data?.bg_width ?? project?.video_width ?? 960
   const bgHeight = pass2Result.data?.bg_height ?? project?.video_height ?? 540
@@ -89,9 +119,17 @@ export default function Pass4Page() {
         </div>
       </div>
 
-      <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
-        Magenta circles show detections in the current frame; cyan circles show detections in the preceding 8 frames.
-      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, margin: '0 0 12px' }}>
+        <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
+          Magenta circles show detections in the current frame; cyan circles show detections in the preceding 8 frames.
+        </p>
+        {overlayReady && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={showDetectionsMap} onChange={(e) => setShowDetectionsMap(e.target.checked)} />
+            All detections
+          </label>
+        )}
+      </div>
 
       {isLoading ? (
         <div style={{
@@ -111,6 +149,7 @@ export default function Pass4Page() {
           ballDetections={ballDetections}
           onFrameChange={handleFrameChange}
           storageKey={`pass4-pos-${projectId}`}
+          staticOverlay={showDetectionsMap ? overlayCanvasRef.current : null}
         />
       )}
 

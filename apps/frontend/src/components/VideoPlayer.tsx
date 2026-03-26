@@ -95,6 +95,7 @@ interface Props {
   storageKey?: string
   previewCanvasRef?: React.RefObject<HTMLCanvasElement>
   bgPlateUrl?: string
+  staticOverlay?: HTMLCanvasElement | null
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ interface Props {
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, ballDetections, courtGeometry, totalFrames,
   annotations, onVideoClick, onFrameChange, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
+  staticOverlay,
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -295,7 +297,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         ctx.stroke()
       }
     }
-  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange])
+    // Draw static overlay (e.g. full-video detections map): white pixels → yellow, black → transparent.
+    if (staticOverlay) {
+      ctx.drawImage(staticOverlay, 0, 0, canvas.width, canvas.height)
+    }
+  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange, staticOverlay])
 
   // Redraw whenever annotations or other overlay state changes (e.g. right after a click).
   useEffect(() => { drawOverlay() }, [drawOverlay])

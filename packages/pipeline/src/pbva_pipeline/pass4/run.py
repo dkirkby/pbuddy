@@ -185,6 +185,16 @@ class Pass4:
 
         cap.release()
 
+        # Build a B&W map of all detection locations at bg-plate resolution.
+        bg_h, bg_w = bg_plate.shape[:2]
+        det_map = np.zeros((bg_h, bg_w), dtype=np.uint8)
+        for d in detections:
+            cx, cy = int(round(d["cx"])), int(round(d["cy"]))
+            x1, x2 = max(0, cx - 1), min(bg_w, cx + 2)
+            y1, y2 = max(0, cy - 1), min(bg_h, cy + 2)
+            det_map[y1:y2, x1:x2] = 255
+        cv2.imwrite(str(raw_dir / "detections_map.png"), det_map)
+
         result = {
             "stable_frame_count": stable_frame_count,
             "first_stable_frame": in_frame,

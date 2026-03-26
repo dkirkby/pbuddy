@@ -83,6 +83,9 @@ export const api = {
   resumePass4: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass4/resume`),
 
+  detectionsMapUrl: (projectId: string) =>
+    `/api/projects/${projectId}/passes/pass4/raw/detections_map.png`,
+
   getPass4Detections: (projectId: string) =>
     get<{ stable_frame_count: number; first_stable_frame: number; last_stable_frame: number; max_ball_radius: number; detection_count: number; detections: { frame: number; cx: number; cy: number; radius: number; area: number; perimeter: number }[] }>(
       `/api/projects/${projectId}/passes/pass4/raw/detections.json`
