@@ -55,12 +55,13 @@ export default function ProjectHome() {
 
   const runPass1 = useMutation({
     mutationFn: () => api.runPass1(projectId!),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+    onSuccess: () => { setProgress(null); qc.invalidateQueries({ queryKey: ['project', projectId] }) },
   })
 
   const runPass2 = useMutation({
     mutationFn: () => api.runPass2(projectId!),
     onSuccess: () => {
+      setProgress(null)
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
       sessionStorage.removeItem(`pass2-pos-${projectId}`)
@@ -69,7 +70,7 @@ export default function ProjectHome() {
 
   const runPass3 = useMutation({
     mutationFn: () => api.runPass3(projectId!),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+    onSuccess: () => { setProgress(null); qc.invalidateQueries({ queryKey: ['project', projectId] }) },
   })
 
   const runPass4 = useMutation({
