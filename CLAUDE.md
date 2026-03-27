@@ -135,6 +135,47 @@ POST   /api/projects/{id}/passes/{pass}/accept
 
 `challenge/` contains a standalone ball detection benchmark: 874 labelled frame images with `data/truth.json` ground truth annotations. `challenge/src/detect.py` is the detector under development; `challenge/src/setup.py` builds the dataset. Run with `uv run python challenge/src/detect.py`. Passes 3 and 4 are currently stubs.
 
+## Frame Index Conventions
+
+Frame indexing is a persistent source of off-by-one bugs. Follow these rules exactly.
+
+### The PTS offset
+
+The video file's first frame has PTS = 1/fps (not 0). This means:
+
+- **Browser**: `requestVideoFrameCallback` gives `metadata.mediaTime` = actual PTS. For OpenCV frame N, `mediaTime ≈ (N+1)/fps`, so `Math.round(mediaTime * fps) = N+1`.
+- **OpenCV**: sequential `cap.read()` after `cap.set(POS_FRAMES, in_frame)` gives `frame_idx = int(cap.get(CAP_PROP_POS_FRAMES)) - 1`. For the i-th read starting from `in_frame`, `frame_idx = in_frame + i`.
+- **Net result**: browser `frameIndex` = OpenCV `frame_idx + 1` for the same physical frame.
+
+### Rules
+
+**In Python (pipeline):** Frame indices stored in JSON artifacts use OpenCV numbering (`frame_idx = int(cap.get(CAP_PROP_POS_FRAMES)) - 1`).
+
+**In the frontend (VideoPlayer):** `frameIndex = Math.round(mediaTime * fps)` during playback (via rVFC). This is 1 higher than the OpenCV index for the same frame.
+
+**When looking up Python artifacts by browser frame index**, subtract 1:
+```ts
+// ballDetections lookup in drawOverlay:
+const fi = frameIndex - offset - 1   // -1 to convert browser→OpenCV numbering
+```
+
+**When looking up browser annotations by OpenCV frame index**, add 1:
+```python
+# pass2 annotations.json keys are browser frame numbers
+ann_key = frame_idx + 1
+if ann_key in ann_by_frame: ...
+```
+
+**When seeking the video from Python frame index N**, use `N / fps` — the browser will snap to the correct frame.
+
+**Pass 2 annotation keys** are browser frame numbers (stored as strings). They were recorded using `Math.round(currentTime * fps)` after a seek. With the fixed step arithmetic (commit 8d650aa), seeks consistently land at `targetFrame / fps`, so annotation keys are consistently browser-numbered (= OpenCV + 1).
+
+### Checklist for new frame-indexed code
+
+- [ ] Is the frame number coming from OpenCV or from the browser?
+- [ ] If crossing the Python↔browser boundary, apply the ±1 correction.
+- [ ] File names for artifacts saved by Python and looked up by the browser should use the **browser frame number** (OpenCV + 1) so that labels and seeks work without adjustment.
+
 ## Key Design Principles
 
 1. **Local-first** — all video, artifacts, and metadata stay on the user's machine
