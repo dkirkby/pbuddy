@@ -136,6 +136,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const vfcHandleRef  = useRef<number | null>(null)   // requestVideoFrameCallback handle
   const stepTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lastFrameIndexRef = useRef(0)   // last frameIndex computed by drawOverlay (rVFC or currentTime)
 
   useEffect(() => { playbackStateRef.current = playbackState }, [playbackState])
   useEffect(() => { fpsRef.current = fps }, [fps])
@@ -199,6 +200,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
     const t = mediaTime ?? video.currentTime
     const frameIndex = Math.round(t * fps)
+    lastFrameIndexRef.current = frameIndex
     const dets = detections ? (detections[frameIndex] ?? []) : []
     setCurrentTime(t)
     setDetCount(dets.length)
@@ -561,7 +563,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     const rect = e.currentTarget.getBoundingClientRect()
     const bgX = (e.clientX - rect.left) / video.clientWidth * bgWidth
     const bgY = (e.clientY - rect.top) / video.clientHeight * bgHeight
-    const fi = Math.round(video.currentTime * fpsRef.current)
+    const fi = lastFrameIndexRef.current
 
     let patchDataUrl: string | null = null
     const size = PATCH_RADIUS * 2

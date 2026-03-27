@@ -168,7 +168,7 @@ if ann_key in ann_by_frame: ...
 
 **When seeking the video from Python frame index N**, use `N / fps` — the browser will snap to the correct frame.
 
-**Pass 2 annotation keys** are browser frame numbers (stored as strings). They were recorded using `Math.round(currentTime * fps)` after a seek. With the fixed step arithmetic (commit 8d650aa), seeks consistently land at `targetFrame / fps`, so annotation keys are consistently browser-numbered (= OpenCV + 1).
+**Pass 2 annotation keys** are browser frame numbers stored by `handleContainerClick` in VideoPlayer. The click handler must use `lastFrameIndexRef.current` (the frameIndex last set by `drawOverlay`) rather than recomputing from `video.currentTime`. After playback, rVFC sets `frameIndex = N+1` for displayed frame N, but `video.currentTime` still reflects PTS N/fps — so recomputing from `currentTime` gives N while the counter shows N+1, causing a silent off-by-one in the stored annotation key.
 
 ### Checklist for new frame-indexed code
 
