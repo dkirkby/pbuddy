@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
+import type { VideoPlayerHandle } from '../components/VideoPlayer'
 
 interface BallDetection {
   cx: number
@@ -15,6 +16,7 @@ interface BallDetection {
 export default function Pass4Page() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+  const playerRef = useRef<VideoPlayerHandle>(null)
   const [currentFrame, setCurrentFrame] = useState(0)
 
   const { data: project } = useQuery({
@@ -51,6 +53,12 @@ export default function Pass4Page() {
     },
   })
 
+  const { data: patchData } = useQuery({
+    queryKey: ['pass4-patches', projectId],
+    queryFn: () => api.getPass4PatchFrames(projectId!),
+  })
+  const patchFrames = patchData?.frames ?? []
+
   const handleFrameChange = useCallback((fi: number) => setCurrentFrame(fi), [])
 
   // Load detections_map.png and colorize: white → yellow/semi-transparent, black → transparent.
@@ -86,6 +94,8 @@ export default function Pass4Page() {
   const fps = pass2Result.data?.fps ?? project?.video_fps ?? 30
   const bgWidth = pass2Result.data?.bg_width ?? project?.video_width ?? 960
   const bgHeight = pass2Result.data?.bg_height ?? project?.video_height ?? 540
+
+  const [hoveredPatch, setHoveredPatch] = useState<number | null>(null)
 
   const totalDetections = detectionsData?.detection_count ?? 0
   const isPaused = detectionsData && 'paused' in detectionsData && (detectionsData as any).paused === true
@@ -141,6 +151,7 @@ export default function Pass4Page() {
         </div>
       ) : (
         <VideoPlayer
+          ref={playerRef}
           videoUrl={api.videoUrl(projectId!)}
           fps={fps}
           bgWidth={bgWidth}
@@ -151,6 +162,51 @@ export default function Pass4Page() {
           storageKey={`pass4-pos-${projectId}`}
           staticOverlay={showDetectionsMap ? overlayCanvasRef.current : null}
         />
+      )}
+
+      {/* Mask patch gallery — one 64×64 BGR patch per annotated frame */}
+      {patchFrames.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>
+            Mask patches ({patchFrames.length} annotated frames) — R=motion, G=color, B=silhouette
+          </div>
+          <div style={{
+            overflowX: 'auto', display: 'flex', gap: 4,
+            padding: 4, background: '#111', borderRadius: 4, alignItems: 'flex-start',
+          }}>
+            {patchFrames.map((fi) => (
+              <div
+                key={fi}
+                style={{ position: 'relative', flexShrink: 0, cursor: 'pointer' }}
+                onClick={() => playerRef.current?.seekToFrame(fi)}
+                onMouseEnter={() => setHoveredPatch(fi)}
+                onMouseLeave={() => setHoveredPatch(null)}
+                title={`Frame ${fi} — click to seek`}
+              >
+                <img
+                  src={hoveredPatch === fi
+                    ? api.pass2AcceptedPatchUrl(projectId!, fi)
+                    : api.pass4PatchUrl(projectId!, fi)}
+                  style={{ display: 'block', width: 128, height: 128, imageRendering: 'pixelated' }}
+                />
+                {/* Centering crosshair */}
+                <div style={{
+                  position: 'absolute', top: '50%', left: 0, right: 0,
+                  height: 1, background: 'rgba(0,220,255,0.4)', transform: 'translateY(-50%)', pointerEvents: 'none',
+                }} />
+                <div style={{
+                  position: 'absolute', left: '50%', top: 0, bottom: 0,
+                  width: 1, background: 'rgba(0,220,255,0.4)', transform: 'translateX(-50%)', pointerEvents: 'none',
+                }} />
+                <span style={{
+                  position: 'absolute', bottom: 2, left: 0, right: 0,
+                  textAlign: 'center', fontSize: 10, color: '#fff',
+                  textShadow: '0 0 3px #000', pointerEvents: 'none',
+                }}>{fi}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Detection table for current frame */}

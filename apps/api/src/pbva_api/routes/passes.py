@@ -666,6 +666,28 @@ def accept_pass3(
 
 
 # ---------------------------------------------------------------------------
+# Pass 2 — accepted patch image access (used by Pass 4 review page on hover)
+# ---------------------------------------------------------------------------
+
+@router.get("/{project_id}/passes/pass2/accepted/patches/{filename}")
+def get_pass2_accepted_patch(
+    project_id: str,
+    filename: str,
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    patches_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass2") / "patches" / "raw"
+    path = (patches_dir / filename).resolve()
+    try:
+        path.relative_to(patches_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Patch not found")
+    return FileResponse(str(path), media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
 # Pass 4 — Ball Detection: raw file access, pause / resume, accept
 # ---------------------------------------------------------------------------
 
@@ -691,6 +713,39 @@ def get_pass4_raw_file(
     if suffix == "json":
         return JSONResponse(content=json.loads(path.read_text()))
     return FileResponse(str(path), media_type=_PASS4_MIME.get(suffix, "application/octet-stream"))
+
+@router.get("/{project_id}/passes/pass4/patches")
+def list_pass4_patches(
+    project_id: str,
+    settings=Depends(get_settings),
+):
+    """Return sorted list of frame numbers that have a mask patch PNG."""
+    from pbva_core import paths as p
+    patches_dir = p.pass_raw_dir(settings.data_root, project_id, "pass4") / "patches"
+    if not patches_dir.exists():
+        return {"frames": []}
+    frames = sorted(int(f.stem) for f in patches_dir.glob("*.png"))
+    return {"frames": frames}
+
+
+@router.get("/{project_id}/passes/pass4/patches/{filename}")
+def get_pass4_patch(
+    project_id: str,
+    filename: str,
+    settings=Depends(get_settings),
+):
+    """Serve a single mask patch PNG from pass4/raw/patches/."""
+    from pbva_core import paths as p
+    patches_dir = p.pass_raw_dir(settings.data_root, project_id, "pass4") / "patches"
+    path = (patches_dir / filename).resolve()
+    try:
+        path.relative_to(patches_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Patch not found")
+    return FileResponse(str(path), media_type="image/png")
+
 
 def _pass4_pause_file(data_root, project_id: str) -> Path:
     from pbva_core import paths as p

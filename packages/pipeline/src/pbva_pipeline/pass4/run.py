@@ -75,12 +75,18 @@ class Pass4:
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
         bg_blur   = cv2.medianBlur(bg_plate, 5)
 
-        progress.update(0.05, "setup", "Loading max ball radius from pass 2…")
+        progress.update(0.05, "setup", "Loading max ball radius and annotations from pass 2…")
         p2_result = json.loads(
             (ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json").read_text()
         )
         max_ball_radius = p2_result.get("max_ball_radius", 16)
         min_blob_radius = p2_result.get("min_ball_radius", 4) / 4
+
+        ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
+        ann_by_frame: dict[int, dict] = {}
+        if ann_path.exists():
+            raw = json.loads(ann_path.read_text()).get("annotations", {})
+            ann_by_frame = {int(k): v for k, v in raw.items()}
 
         progress.update(0.06, "setup", "Building color lookup tables from pass 3 polygons…")
         poly_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "ball_color_polygons.json"
@@ -106,9 +112,13 @@ class Pass4:
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
 
-        pause_file = raw_dir / ".pause"
+        pause_file  = raw_dir / ".pause"
+        patches_dir = raw_dir / "patches"
+        patches_dir.mkdir(parents=True, exist_ok=True)
         open_kernel  = np.ones((5, 5), np.uint8)
         close_kernel = np.ones((9, 9), np.uint8)
+        bg_h, bg_w   = bg_plate.shape[:2]
+        half = 32   # patch half-size → 64×64 output
         stable_frame_count = 0
         detections = []
 
@@ -181,12 +191,27 @@ class Pass4:
                         "perimeter": round(perimeter, 1),
                     })
 
+            # --- Annotation patch: 64×64 RGB showing R=motion, G=color, B=tent mask ---
+            # Annotation keys are browser frame numbers (= frame_idx + 1 due to PTS offset).
+            ann_key = frame_idx + 1
+            if ann_key in ann_by_frame:
+                ann = ann_by_frame[ann_key]
+                ax, ay = int(round(ann["x"])), int(round(ann["y"]))
+                sx1, sx2 = max(0, ax - half), min(bg_w, ax + half)
+                sy1, sy2 = max(0, ay - half), min(bg_h, ay + half)
+                dx1 = half - (ax - sx1);  dx2 = dx1 + (sx2 - sx1)
+                dy1 = half - (ay - sy1);  dy2 = dy1 + (sy2 - sy1)
+                patch = np.zeros((half * 2, half * 2, 3), dtype=np.uint8)
+                patch[dy1:dy2, dx1:dx2, 2] = motion_mask[sy1:sy2, sx1:sx2]  # R
+                patch[dy1:dy2, dx1:dx2, 1] = color_mask[sy1:sy2, sx1:sx2]   # G
+                patch[dy1:dy2, dx1:dx2, 0] = tent_mask[sy1:sy2, sx1:sx2]    # B
+                cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
+
             stable_frame_count += 1
 
         cap.release()
 
         # Build a B&W map of all detection locations at bg-plate resolution.
-        bg_h, bg_w = bg_plate.shape[:2]
         det_map = np.zeros((bg_h, bg_w), dtype=np.uint8)
         for d in detections:
             cx, cy = int(round(d["cx"])), int(round(d["cy"]))

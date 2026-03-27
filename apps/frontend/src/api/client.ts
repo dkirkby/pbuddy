@@ -86,6 +86,15 @@ export const api = {
   detectionsMapUrl: (projectId: string) =>
     `/api/projects/${projectId}/passes/pass4/raw/detections_map.png`,
 
+  pass2AcceptedPatchUrl: (projectId: string, frame: number) =>
+    `/api/projects/${projectId}/passes/pass2/accepted/patches/${String(frame).padStart(6, '0')}.png`,
+
+  getPass4PatchFrames: (projectId: string) =>
+    get<{ frames: number[] }>(`/api/projects/${projectId}/passes/pass4/patches`),
+
+  pass4PatchUrl: (projectId: string, frame: number) =>
+    `/api/projects/${projectId}/passes/pass4/patches/${String(frame).padStart(6, '0')}.png`,
+
   getPass4Detections: (projectId: string) =>
     get<{ stable_frame_count: number; first_stable_frame: number; last_stable_frame: number; max_ball_radius: number; detection_count: number; detections: { frame: number; cx: number; cy: number; radius: number; area: number; perimeter: number }[] }>(
       `/api/projects/${projectId}/passes/pass4/raw/detections.json`
