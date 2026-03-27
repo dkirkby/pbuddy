@@ -681,8 +681,31 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         />
       </div>
 
+      {/* Seek bar */}
+      {duration > 0 && (
+        <input
+          type="range"
+          min={0}
+          max={duration}
+          step="any"
+          value={currentTime}
+          style={{ width: '100%', marginTop: 6, cursor: 'pointer', display: 'block' }}
+          onChange={(e) => {
+            const video = videoRef.current
+            if (!video) return
+            if (playbackStateRef.current !== 'stopped') {
+              video.pause()
+              setPlaybackState('stopped')
+            }
+            // Snap to the nearest frame boundary to avoid off-by-one errors.
+            const targetFrame = Math.round(parseFloat(e.target.value) * fpsRef.current)
+            video.currentTime = Math.max(0, Math.min(video.duration, targetFrame / fpsRef.current))
+          }}
+        />
+      )}
+
       {/* Playback controls */}
-      <div style={{ marginTop: 10, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ marginTop: 6, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
         {/* Rewind */}
         <button onClick={handleRewind} title="Rewind to beginning" style={btnStyle}>⏮</button>
 
