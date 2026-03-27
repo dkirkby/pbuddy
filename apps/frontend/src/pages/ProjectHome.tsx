@@ -28,7 +28,7 @@ export default function ProjectHome() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [progress, setProgress] = useState<{ stage: string; fraction: number } | null>(null)
+  const [progress, setProgress] = useState<{ passName: string; stage: string; fraction: number } | null>(null)
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -44,6 +44,7 @@ export default function ProjectHome() {
   useProjectWebSocket(projectId ?? null, (msg) => {
     if (msg.type === 'job_progress') {
       setProgress({
+        passName: msg.payload.pass_name as string,
         stage: msg.payload.stage as string,
         fraction: msg.payload.progress as number,
       })
@@ -112,7 +113,7 @@ export default function ProjectHome() {
         </p>
 
         {/* Progress bar */}
-        {progress && (pass1?.state === 'running' || pass1?.state === 'queued') && (
+        {progress?.passName === 'pass1' && (pass1?.state === 'running' || pass1?.state === 'queued') && (
           <div style={{ margin: '8px 0' }}>
             <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
               <div style={{
@@ -175,7 +176,7 @@ export default function ProjectHome() {
           Manually mark ball positions frame by frame to build annotation data.
         </p>
 
-        {progress && (pass2?.state === 'running' || pass2?.state === 'queued') && (
+        {progress?.passName === 'pass2' && (pass2?.state === 'running' || pass2?.state === 'queued') && (
           <div style={{ margin: '8px 0' }}>
             <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
               <div style={{
@@ -240,7 +241,7 @@ export default function ProjectHome() {
           Samples per-pixel color data from annotated ball patches to build a ball color profile.
         </p>
 
-        {progress && (pass3?.state === 'running' || pass3?.state === 'queued') && (
+        {progress?.passName === 'pass3' && (pass3?.state === 'running' || pass3?.state === 'queued') && (
           <div style={{ margin: '8px 0' }}>
             <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
               <div style={{
@@ -305,7 +306,7 @@ export default function ProjectHome() {
           Detects ball candidates in each frame using motion, color, and silhouette masks.
         </p>
 
-        {progress && (pass4?.state === 'running' || pass4?.state === 'queued') && (
+        {progress?.passName === 'pass4' && (pass4?.state === 'running' || pass4?.state === 'queued') && (
           <div style={{ margin: '8px 0' }}>
             <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
               <div style={{
@@ -337,7 +338,7 @@ export default function ProjectHome() {
               {runPass4.isPending ? 'Queuing…' : 'Run Pass 4'}
             </button>
           )}
-          {(pass4?.state === 'waiting_for_user' || progress?.stage === 'paused') && (
+          {(pass4?.state === 'waiting_for_user' || progress?.passName === 'pass4' && progress.stage === 'paused') && (
             <button
               onClick={() => navigate(`/projects/${projectId}/pass4`)}
               style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
@@ -348,7 +349,7 @@ export default function ProjectHome() {
           {pass4?.state === 'accepted' && (
             <span style={{ color: '#090' }}>✓ Accepted</span>
           )}
-          {(pass4?.state === 'waiting_for_user' || pass4?.state === 'accepted' || progress?.stage === 'paused') && pass3?.state === 'accepted' && (
+          {(pass4?.state === 'waiting_for_user' || pass4?.state === 'accepted' || progress?.passName === 'pass4' && progress.stage === 'paused') && pass3?.state === 'accepted' && (
             <button
               onClick={() => runPass4.mutate()}
               disabled={runPass4.isPending}
