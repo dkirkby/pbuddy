@@ -88,6 +88,17 @@ def run_pass(
     if pass_name == "pass4":
         _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
 
+    # Clear pass2 corrections (annotations + patches) so a re-run starts fresh.
+    if pass_name == "pass2":
+        import shutil
+        from pbva_core import paths as p
+        corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
+        ann_path = corrections_dir / "annotations.json"
+        ann_path.unlink(missing_ok=True)
+        patches_dir = corrections_dir / "patches"
+        if patches_dir.exists():
+            shutil.rmtree(patches_dir)
+
     # Create job.
     job_id = str(uuid.uuid4())
     job = Job(
