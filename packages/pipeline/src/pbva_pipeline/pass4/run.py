@@ -162,17 +162,21 @@ class Pass4:
             # --- Motion mask ---
             motion_mask = detect_motion(frame, bg_blur, open_kernel, close_kernel)
 
-            # --- Color mask ---
+            # --- H-S and V-S color masks (each cleaned separately) ---
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             H = hsv[:, :, 0]   # 0-180
             S = hsv[:, :, 1]   # 0-255
             V = hsv[:, :, 2]   # 0-255
-            color_raw = ((hs_lut[S, H] > 0) & (vs_lut[S, V] > 0)).astype(np.uint8) * 255
-            color_mask = cv2.morphologyEx(color_raw,  cv2.MORPH_OPEN,  open_kernel)
-            color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
+            hs_raw = (hs_lut[S, H] > 0).astype(np.uint8) * 255
+            hs_mask = cv2.morphologyEx(hs_raw,  cv2.MORPH_OPEN,  open_kernel)
+            hs_mask = cv2.morphologyEx(hs_mask, cv2.MORPH_CLOSE, close_kernel)
+            vs_raw = (vs_lut[S, V] > 0).astype(np.uint8) * 255
+            vs_mask = cv2.morphologyEx(vs_raw,  cv2.MORPH_OPEN,  open_kernel)
+            vs_mask = cv2.morphologyEx(vs_mask, cv2.MORPH_CLOSE, close_kernel)
 
-            # --- Combined mask: motion AND color AND tent silhouette ---
-            combined = cv2.bitwise_and(motion_mask, color_mask)
+            # --- Combined mask: motion AND H-S AND V-S AND tent silhouette ---
+            combined = cv2.bitwise_and(motion_mask, hs_mask)
+            combined = cv2.bitwise_and(combined, vs_mask)
             combined = cv2.bitwise_and(combined, tent_mask)
 
             # --- Blob detection ---
@@ -191,7 +195,7 @@ class Pass4:
                         "perimeter": round(perimeter, 1),
                     })
 
-            # --- Annotation patch: 64×64 RGB showing R=motion, G=color, B=tent mask ---
+            # --- Annotation patch: 64×64 RGB showing R=motion, G=H-S mask, B=V-S mask ---
             # Annotation keys are browser frame numbers (= frame_idx + 1 due to PTS offset).
             ann_key = frame_idx + 1
             if ann_key in ann_by_frame:
@@ -203,8 +207,8 @@ class Pass4:
                 dy1 = half - (ay - sy1);  dy2 = dy1 + (sy2 - sy1)
                 patch = np.zeros((half * 2, half * 2, 3), dtype=np.uint8)
                 patch[dy1:dy2, dx1:dx2, 2] = motion_mask[sy1:sy2, sx1:sx2]  # R
-                patch[dy1:dy2, dx1:dx2, 1] = color_mask[sy1:sy2, sx1:sx2]   # G
-                patch[dy1:dy2, dx1:dx2, 0] = tent_mask[sy1:sy2, sx1:sx2]    # B
+                patch[dy1:dy2, dx1:dx2, 1] = hs_mask[sy1:sy2, sx1:sx2]      # G
+                patch[dy1:dy2, dx1:dx2, 0] = vs_mask[sy1:sy2, sx1:sx2]      # B
                 cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
 
             stable_frame_count += 1

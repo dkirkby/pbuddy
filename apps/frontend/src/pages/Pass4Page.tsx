@@ -168,7 +168,7 @@ export default function Pass4Page() {
       {patchFrames.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>
-            Mask patches ({patchFrames.length} annotated frames) — R=motion, G=color, B=silhouette
+            Mask patches ({patchFrames.length} annotated frames) — R=motion, G=H-S, B=V-S
           </div>
           <div style={{
             overflowX: 'auto', display: 'flex', gap: 4,
