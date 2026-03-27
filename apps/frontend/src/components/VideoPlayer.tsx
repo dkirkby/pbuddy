@@ -120,6 +120,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const [playbackState, setPlaybackState] = useState<PlaybackState>('stopped')
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [seekBarValue, setSeekBarValue] = useState(0)
+  const isDraggingSeekBar = useRef(false)
   const [showCourt, setShowCourt] = useState(false)
   const [showTent, setShowTent] = useState(false)
   const [showBgSub, setShowBgSub] = useState(false)
@@ -140,6 +142,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   useEffect(() => { playbackStateRef.current = playbackState }, [playbackState])
   useEffect(() => { fpsRef.current = fps }, [fps])
+
+  // Keep seek bar in sync with video position when not dragging.
+  useEffect(() => {
+    if (!isDraggingSeekBar.current) setSeekBarValue(currentTime)
+  }, [currentTime])
 
   // Load median bg plate image whenever the URL changes.
   useEffect(() => {
@@ -688,8 +695,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           min={0}
           max={duration}
           step="any"
-          value={currentTime}
+          value={seekBarValue}
           style={{ width: '100%', marginTop: 6, cursor: 'pointer', display: 'block' }}
+          onPointerDown={() => { isDraggingSeekBar.current = true }}
+          onPointerUp={() => { isDraggingSeekBar.current = false }}
           onChange={(e) => {
             const video = videoRef.current
             if (!video) return
@@ -697,8 +706,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
               video.pause()
               setPlaybackState('stopped')
             }
+            const v = parseFloat(e.target.value)
+            // Update slider position immediately for real-time visual feedback.
+            setSeekBarValue(v)
             // Snap to the nearest frame boundary to avoid off-by-one errors.
-            const targetFrame = Math.round(parseFloat(e.target.value) * fpsRef.current)
+            const targetFrame = Math.round(v * fpsRef.current)
             video.currentTime = Math.max(0, Math.min(video.duration, targetFrame / fpsRef.current))
           }}
         />
