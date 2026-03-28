@@ -59,6 +59,13 @@ export default function Pass4Page() {
   })
   const patchFrames = patchData?.frames ?? []
 
+  // Pass 2 annotations — needed for per-frame ball radius overlays on patches.
+  const { data: pass2Corrections } = useQuery({
+    queryKey: ['pass2-corrections', projectId],
+    queryFn: () => api.getPass2Corrections(projectId!),
+  })
+  const annotationsByFrame = pass2Corrections?.data?.annotations ?? {}
+
   const handleFrameChange = useCallback((fi: number) => setCurrentFrame(fi), [])
 
   // Load detections_map.png and colorize: white → yellow/semi-transparent, black → transparent.
@@ -189,7 +196,7 @@ export default function Pass4Page() {
                     : api.pass4PatchUrl(projectId!, fi)}
                   style={{ display: 'block', width: 128, height: 128, imageRendering: 'pixelated' }}
                 />
-                {/* Centering crosshair */}
+                {/* Centering crosshair + annotated radius circle */}
                 <div style={{
                   position: 'absolute', top: '50%', left: 0, right: 0,
                   height: 1, background: 'rgba(0,220,255,0.4)', transform: 'translateY(-50%)', pointerEvents: 'none',
@@ -198,6 +205,16 @@ export default function Pass4Page() {
                   position: 'absolute', left: '50%', top: 0, bottom: 0,
                   width: 1, background: 'rgba(0,220,255,0.4)', transform: 'translateX(-50%)', pointerEvents: 'none',
                 }} />
+                {(() => {
+                  const ann = annotationsByFrame[String(fi)]
+                  if (!ann?.radius) return null
+                  const r = ann.radius * 2  // bg-plate px → CSS px (zoom = 2)
+                  return (
+                    <svg width={128} height={128} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}>
+                      <circle cx={64} cy={64} r={r} fill="none" stroke="rgba(0,220,255,0.85)" strokeWidth={1.5} />
+                    </svg>
+                  )
+                })()}
                 <span style={{
                   position: 'absolute', bottom: 2, left: 0, right: 0,
                   textAlign: 'center', fontSize: 10, color: '#fff',
