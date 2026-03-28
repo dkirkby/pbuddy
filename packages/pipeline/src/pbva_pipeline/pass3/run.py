@@ -89,11 +89,21 @@ class Pass3:
                                  x_lim=(0, 180), y_lim=(0, 255),
                                  ball_x_idx=3, ball_y_idx=4,
                                  stem="hue_saturation")
+        self._write_scatter_plot(ctx, [], x_col="H", y_col="S",
+                                 x_label="Hue (0–180)", y_label="Saturation (0–255)",
+                                 x_lim=(0, 180), y_lim=(0, 255),
+                                 ball_x_idx=3, ball_y_idx=4,
+                                 stem="hue_saturation_bg")
         self._write_scatter_plot(ctx, rows, x_col="V", y_col="S",
                                  x_label="Value (0–255)", y_label="Saturation (0–255)",
                                  x_lim=(0, 255), y_lim=(0, 255),
                                  ball_x_idx=5, ball_y_idx=4,
                                  stem="value_saturation")
+        self._write_scatter_plot(ctx, [], x_col="V", y_col="S",
+                                 x_label="Value (0–255)", y_label="Saturation (0–255)",
+                                 x_lim=(0, 255), y_lim=(0, 255),
+                                 ball_x_idx=5, ball_y_idx=4,
+                                 stem="value_saturation_bg")
 
         progress.update(1.0, "done", f"Sampled {len(rows)} ball pixels, {bg_pixel_count} bg pixels")
         return {"ball_pixel_count": len(rows), "bg_pixel_count": bg_pixel_count, "annotation_count": total}
@@ -200,7 +210,9 @@ class Pass3:
         for name, typ in [
             ("ball_colors.csv", "csv"), ("bg_colors.csv", "csv"),
             ("hue_saturation.png", "png"), ("hue_saturation.json", "json"),
+            ("hue_saturation_bg.png", "png"),
             ("value_saturation.png", "png"), ("value_saturation.json", "json"),
+            ("value_saturation_bg.png", "png"),
         ]:
             p = raw_dir / name
             if p.exists():
@@ -223,8 +235,8 @@ class Pass3:
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
         for name in ("ball_colors.csv", "bg_colors.csv",
-                     "hue_saturation.png", "hue_saturation.json",
-                     "value_saturation.png", "value_saturation.json"):
+                     "hue_saturation.png", "hue_saturation.json", "hue_saturation_bg.png",
+                     "value_saturation.png", "value_saturation.json", "value_saturation_bg.png"):
             src = ctx.paths.pass_raw_dir / name
             if src.exists():
                 shutil.copy2(src, accepted_dir / name)

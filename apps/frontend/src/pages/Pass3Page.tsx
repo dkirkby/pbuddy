@@ -216,6 +216,7 @@ export default function Pass3Page() {
   const [hsVerts, setHsVerts] = useState<Point[]>([])
   const [vsVerts, setVsVerts] = useState<Point[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [bgOnly, setBgOnly] = useState(false)
 
   // Populate polygon editors from saved corrections once mappings are ready.
   useEffect(() => {
@@ -254,8 +255,10 @@ export default function Pass3Page() {
 
   if (!hsMapping || !vsMapping) return <div style={{ padding: 24 }}>Loading…</div>
 
-  const hsUrl = `/api/projects/${projectId}/passes/pass3/raw/hue_saturation.png`
-  const vsUrl = `/api/projects/${projectId}/passes/pass3/raw/value_saturation.png`
+  const hsStem = bgOnly ? 'hue_saturation_bg' : 'hue_saturation'
+  const vsStem = bgOnly ? 'value_saturation_bg' : 'value_saturation'
+  const hsUrl = `/api/projects/${projectId}/passes/pass3/raw/${hsStem}.png`
+  const vsUrl = `/api/projects/${projectId}/passes/pass3/raw/${vsStem}.png`
 
   return (
     <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
@@ -263,13 +266,19 @@ export default function Pass3Page() {
         ← Project
       </button>
       <h1 style={{ marginTop: 0 }}>Pass 3 — Ball Color Tagging</h1>
-      <p style={{ color: '#555', marginBottom: 20, maxWidth: 760 }}>
-        Draw a polygon around the ball color cluster in each plot.
-        <strong> Click</strong> to place a vertex ·
-        <strong> Drag</strong> a vertex to reposition ·
-        <strong> Click an edge</strong> to insert a vertex ·
-        <strong> Delete/Backspace</strong> to remove the selected vertex.
-      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 20, flexWrap: 'wrap' }}>
+        <p style={{ color: '#555', margin: 0, maxWidth: 620 }}>
+          Draw a polygon around the ball color cluster in each plot.
+          <strong> Click</strong> to place a vertex ·
+          <strong> Drag</strong> a vertex to reposition ·
+          <strong> Click an edge</strong> to insert a vertex ·
+          <strong> Delete/Backspace</strong> to remove the selected vertex.
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 14 }}>
+          <input type="checkbox" checked={bgOnly} onChange={e => setBgOnly(e.target.checked)} />
+          Background only
+        </label>
+      </div>
 
       <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
         <div>
