@@ -76,7 +76,7 @@ export default function Pass4Page() {
   useEffect(() => {
     if (!detectionsData) return
     const img = new Image()
-    img.src = api.detectionsMapUrl(projectId!)
+    img.src = `${api.detectionsMapUrl(projectId!)}?t=${detectionsData.detection_count}`
     img.onload = () => {
       const offscreen = document.createElement('canvas')
       offscreen.width = img.naturalWidth

@@ -727,7 +727,7 @@ def get_pass2_accepted_patch(
 # Pass 4 — Ball Detection: raw file access, pause / resume, accept
 # ---------------------------------------------------------------------------
 
-_PASS4_MIME = {"json": "application/json"}
+_PASS4_MIME = {"json": "application/json", "png": "image/png"}
 
 
 @router.get("/{project_id}/passes/pass4/raw/{filename}")

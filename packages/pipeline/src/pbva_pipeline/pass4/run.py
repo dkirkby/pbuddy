@@ -13,13 +13,13 @@ from pbva_core.types import Pass1AcceptedOutput
 from pbva_pipeline.base import PassContext
 
 
-def detect_motion(frame, bg_blur, open_kernel, close_kernel, blur=5, threshold=25):
+def detect_motion(frame, bg_blur, close_kernel, blur=3, threshold=25):
     frame_blur = cv2.medianBlur(frame, blur)
     diff = cv2.absdiff(frame_blur, bg_blur)
     motion = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
     _, moving = cv2.threshold(motion, threshold, 255, cv2.THRESH_BINARY)
-    cleaned = cv2.morphologyEx(moving,  cv2.MORPH_OPEN,  open_kernel)
-    solid   = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, close_kernel)
+    moving = cv2.medianBlur(moving, 3)
+    solid  = cv2.morphologyEx(moving, cv2.MORPH_CLOSE, close_kernel)
     return solid
 
 
@@ -73,7 +73,7 @@ class Pass4:
         progress.update(0.04, "setup", "Loading background plate and tent mask…")
         bg_plate = cv2.imread(str(pass1_dir / "raw" / "median_background.png"))
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
-        bg_blur   = cv2.medianBlur(bg_plate, 5)
+        bg_blur   = cv2.medianBlur(bg_plate, 3)
 
         progress.update(0.05, "setup", "Loading max ball radius and annotations from pass 2…")
         p2_result = json.loads(
@@ -115,11 +115,8 @@ class Pass4:
         pause_file  = raw_dir / ".pause"
         patches_dir = raw_dir / "patches"
         patches_dir.mkdir(parents=True, exist_ok=True)
-        open_kernel  = np.ones((5, 5), np.uint8)
-        close_kernel = np.ones((9, 9), np.uint8)
-        motion_ksize = open_kernel.shape[0]
-        color_ksize  = close_kernel.shape[0]
-        max_blob_radius = max_ball_radius + max(motion_ksize, color_ksize)
+        close_kernel = np.ones((5, 5), np.uint8)
+        max_blob_radius = max_ball_radius + close_kernel.shape[0]
         bg_h, bg_w   = bg_plate.shape[:2]
         half = 32   # patch half-size → 64×64 output
         stable_frame_count = 0
@@ -166,19 +163,15 @@ class Pass4:
                 )
 
             # --- Motion mask ---
-            motion_mask = detect_motion(frame, bg_blur, open_kernel, close_kernel)
+            motion_mask = detect_motion(frame, bg_blur, close_kernel)
 
             # --- H-S and V-S color masks (each cleaned separately) ---
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             H = hsv[:, :, 0]   # 0-180
             S = hsv[:, :, 1]   # 0-255
             V = hsv[:, :, 2]   # 0-255
-            hs_raw = (hs_lut[S, H] > 0).astype(np.uint8) * 255
-            hs_mask = cv2.morphologyEx(hs_raw,  cv2.MORPH_OPEN,  open_kernel)
-            hs_mask = cv2.morphologyEx(hs_mask, cv2.MORPH_CLOSE, close_kernel)
-            vs_raw = (vs_lut[S, V] > 0).astype(np.uint8) * 255
-            vs_mask = cv2.morphologyEx(vs_raw,  cv2.MORPH_OPEN,  open_kernel)
-            vs_mask = cv2.morphologyEx(vs_mask, cv2.MORPH_CLOSE, close_kernel)
+            hs_mask = cv2.morphologyEx((hs_lut[S, H] > 0).astype(np.uint8) * 255, cv2.MORPH_CLOSE, close_kernel)
+            vs_mask = cv2.morphologyEx((vs_lut[S, V] > 0).astype(np.uint8) * 255, cv2.MORPH_CLOSE, close_kernel)
 
             # --- Combined mask: motion AND H-S AND V-S AND tent silhouette ---
             combined = cv2.bitwise_and(motion_mask, hs_mask)
@@ -189,8 +182,8 @@ class Pass4:
             contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for contour in contours:
                 (cx, cy), radius = cv2.minEnclosingCircle(contour)
-                if min_blob_radius <= radius <= max_blob_radius:
-                    area = cv2.contourArea(contour)
+                area = cv2.contourArea(contour)
+                if min_blob_radius <= radius <= max_blob_radius and area >= 2.0:
                     perimeter = cv2.arcLength(contour, closed=True)
                     detections.append({
                         "frame": frame_idx,
