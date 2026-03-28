@@ -34,6 +34,14 @@ _RUN_RESETS_STATUS: dict[str, ProjectStatus] = {
     "pass4": ProjectStatus.pass3_accepted,
 }
 
+# Passes that must be invalidated when a given pass is re-run.
+_DOWNSTREAM_PASSES: dict[str, list[str]] = {
+    "pass1": ["pass2", "pass3", "pass4"],
+    "pass2": ["pass3", "pass4"],
+    "pass3": ["pass4"],
+    "pass4": [],
+}
+
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -69,40 +77,37 @@ def run_pass(
     project = _get_project_or_404(db, project_id)
     pass_row = _get_pass_or_404(db, project_id, pass_name)
 
-    _VALID_RUN_STATES = {
-        PassState.not_started.value,
-        PassState.failed.value,
-        PassState.waiting_for_user.value,
-        PassState.accepted.value,
-        PassState.queued.value,    # allow re-run while paused (pass4)
-        PassState.running.value,   # allow re-run while running (pass4 paused mid-run)
-    }
-    if pass_row.state not in _VALID_RUN_STATES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Pass {pass_name} cannot be run from state '{pass_row.state}'",
-        )
-
-    # When an upstream pass is re-run, cancel any actively running pass4 job so
-    # the worker is freed up to process the newly queued job.
-    if pass_name in ("pass1", "pass2", "pass3"):
-        pass4_row = db.execute(
-            select(Pass)
-            .where(Pass.project_id == project_id)
-            .where(Pass.pass_name == "pass4")
-        ).scalar_one_or_none()
-        if pass4_row and pass4_row.current_job_id:
-            p4_job = db.get(Job, pass4_row.current_job_id)
-            if p4_job and p4_job.status == "running":
-                p4_job.status = "cancel_requested"
-                _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
-                pass4_row.state = PassState.cancelled.value
-                pass4_row.updated_at = _utcnow()
+    # Any pass state is valid to re-run; downstream cascade handles consistency.
+    # (produced_raw_output is unused but included defensively.)
 
     # If pass4 is paused, remove the sentinel so the stalled job can finish
     # and the worker can then pick up the new job.
     if pass_name == "pass4":
         _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
+
+    # Reset downstream passes to not_started so stale results are never shown.
+    # If pass4 is actively running, cancel it first so the worker is freed.
+    for downstream in _DOWNSTREAM_PASSES.get(pass_name, []):
+        ds_row = db.execute(
+            select(Pass)
+            .where(Pass.project_id == project_id)
+            .where(Pass.pass_name == downstream)
+        ).scalar_one_or_none()
+        if ds_row is None or ds_row.state == PassState.not_started.value:
+            continue
+        # Cancel a running pass4 job so the worker can pick up the new upstream job.
+        if ds_row.state in (PassState.running.value, PassState.queued.value):
+            if downstream == "pass4" and ds_row.current_job_id:
+                ds_job = db.get(Job, ds_row.current_job_id)
+                if ds_job and ds_job.status in ("running", "queued"):
+                    ds_job.status = "cancel_requested"
+                    _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
+        ds_row.state = PassState.not_started.value
+        ds_row.latest_raw_artifact_id = None
+        ds_row.latest_correction_id = None
+        ds_row.latest_accepted_artifact_id = None
+        ds_row.current_job_id = None
+        ds_row.updated_at = _utcnow()
 
     # Clear pass4 raw outputs when re-running so stale patches and detections
     # are not mixed with results from the new run.

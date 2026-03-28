@@ -104,6 +104,18 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
 
         ctx = build_pass_context(job, project, settings, session_factory, progress)
 
+    # --- Mark pass as running ---
+    with session_factory() as session:
+        pass_row = session.execute(
+            __import__("sqlalchemy").select(Pass)
+            .where(Pass.project_id == job.project_id)
+            .where(Pass.pass_name == job.pass_name)
+        ).scalar_one_or_none()
+        if pass_row:
+            pass_row.state = PassState.running.value
+            pass_row.updated_at = _utcnow()
+            session.commit()
+
     # --- Validate inputs ---
     pass_impl.validate_inputs(ctx)
 
@@ -216,7 +228,9 @@ def run_worker(settings: Settings) -> None:
                 if job_row:
                     job_row.status = "cancelled"
                     job_row.finished_at = _utcnow()
-                    session.commit()
+                # Pass state was already reset to not_started by the upstream
+                # run_pass endpoint, so no change needed here.
+                session.commit()
 
         except Exception:
             tb = traceback.format_exc()

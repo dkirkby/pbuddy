@@ -8,11 +8,10 @@ const STATE_LABELS: Record<string, string> = {
   not_started: 'Not started',
   queued: 'Queued',
   running: 'Running…',
-  produced_raw_output: 'Processing…',
   waiting_for_user: 'Ready for review',
   accepted: 'Accepted',
   failed: 'Failed',
-  cancelled: 'Cancelled',
+  cancelled: 'Not started',
 }
 
 const STATE_COLOR: Record<string, string> = {
@@ -22,6 +21,7 @@ const STATE_COLOR: Record<string, string> = {
   waiting_for_user: '#0a0',
   accepted: '#090',
   failed: '#c00',
+  cancelled: '#aaa',
 }
 
 export default function ProjectHome() {
@@ -34,10 +34,11 @@ export default function ProjectHome() {
     queryKey: ['project', projectId],
     queryFn: () => api.getProject(projectId!),
     refetchInterval: (query) => {
-      const status = query.state.data?.status
-      if (status?.includes('waiting') || status?.includes('running') || status?.includes('queued'))
-        return 3000
-      return false
+      const passes = query.state.data?.passes ?? []
+      const anyInFlight = passes.some((p: { state: string }) =>
+        p.state === 'queued' || p.state === 'running'
+      )
+      return anyInFlight ? 3000 : false
     },
   })
 
@@ -100,223 +101,69 @@ export default function ProjectHome() {
         )}
       </div>
 
+      {/* Pass cards — shared logic:
+            queued / running  → progress bar only (job in flight)
+            not_started / failed / cancelled → Run button (prerequisites permitting)
+            waiting_for_user  → Review → + Re-run
+            accepted          → ✓ Accepted + Re-run
+      */}
+
       {/* Pass 1 card */}
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>Pass 1 — Scene Calibration</h2>
-          <span style={{ color: STATE_COLOR[pass1?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
-            {STATE_LABELS[pass1?.state ?? 'not_started']}
-          </span>
-        </div>
-        <p style={{ color: '#555', fontSize: 14 }}>
-          Detects stable video bounds and generates a median background image for court alignment.
-        </p>
-
-        {/* Progress bar */}
-        {progress?.passName === 'pass1' && (pass1?.state === 'running' || pass1?.state === 'queued') && (
-          <div style={{ margin: '8px 0' }}>
-            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
-              <div style={{
-                width: `${Math.round(progress.fraction * 100)}%`,
-                background: '#09f', borderRadius: 4, height: 8,
-                transition: 'width 0.3s',
-              }} />
-            </div>
-            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
-              {progress.stage} — {Math.round(progress.fraction * 100)}%
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          {(pass1?.state === 'not_started' || pass1?.state === 'failed') && (
-            <button
-              onClick={() => runPass1.mutate()}
-              disabled={runPass1.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer' }}
-            >
-              {runPass1.isPending ? 'Queuing…' : 'Run Pass 1'}
-            </button>
-          )}
-          {pass1?.state === 'waiting_for_user' && (
-            <button
-              onClick={() => navigate(`/projects/${projectId}/pass1`)}
-              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
-            >
-              Review →
-            </button>
-          )}
-          {pass1?.state === 'accepted' && (
-            <span style={{ color: '#090' }}>✓ Accepted</span>
-          )}
-          {(pass1?.state === 'waiting_for_user' || pass1?.state === 'accepted') && (
-            <button
-              onClick={() => runPass1.mutate()}
-              disabled={runPass1.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
-            >
-              {runPass1.isPending ? 'Queuing…' : 'Re-run'}
-            </button>
-          )}
-        </div>
-      </div>
+      <PassCard
+        title="Pass 1 — Scene Calibration"
+        description="Detects stable video bounds and generates a median background image for court alignment."
+        pass={pass1}
+        prereqMet={true}
+        prereqLabel=""
+        progress={progress?.passName === 'pass1' ? progress : null}
+        onRun={() => runPass1.mutate()}
+        isPending={runPass1.isPending}
+        reviewPath={`/projects/${projectId}/pass1`}
+        reviewLabel="Review →"
+      />
 
       {/* Pass 2 card */}
-      <div style={{
-        border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
-        opacity: pass1?.state === 'accepted' ? 1 : 0.4,
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>Pass 2 — Ball Annotation</h2>
-          <span style={{ color: STATE_COLOR[pass2?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
-            {STATE_LABELS[pass2?.state ?? 'not_started']}
-          </span>
-        </div>
-        <p style={{ color: '#555', fontSize: 14 }}>
-          Manually mark ball positions frame by frame to build annotation data.
-        </p>
-
-        {progress?.passName === 'pass2' && (pass2?.state === 'running' || pass2?.state === 'queued') && (
-          <div style={{ margin: '8px 0' }}>
-            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
-              <div style={{
-                width: `${Math.round(progress.fraction * 100)}%`,
-                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
-              }} />
-            </div>
-            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
-              {progress.stage} — {Math.round(progress.fraction * 100)}%
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          {pass1?.state === 'accepted' && (pass2?.state === 'not_started' || pass2?.state === 'failed') && (
-            <button
-              onClick={() => runPass2.mutate()}
-              disabled={runPass2.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer' }}
-            >
-              {runPass2.isPending ? 'Queuing…' : 'Run Pass 2'}
-            </button>
-          )}
-          {pass2?.state === 'waiting_for_user' && (
-            <button
-              onClick={() => navigate(`/projects/${projectId}/pass2`)}
-              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
-            >
-              Annotate →
-            </button>
-          )}
-          {pass2?.state === 'accepted' && (
-            <span style={{ color: '#090' }}>✓ Accepted</span>
-          )}
-          {(pass2?.state === 'waiting_for_user' || pass2?.state === 'accepted') && pass1?.state === 'accepted' && (
-            <button
-              onClick={() => runPass2.mutate()}
-              disabled={runPass2.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
-            >
-              {runPass2.isPending ? 'Queuing…' : 'Re-run'}
-            </button>
-          )}
-          {pass1?.state !== 'accepted' && (
-            <span style={{ color: '#aaa', fontSize: 14 }}>Complete Pass 1 first.</span>
-          )}
-        </div>
-      </div>
+      <PassCard
+        title="Pass 2 — Ball Annotation"
+        description="Manually mark ball positions frame by frame to build annotation data."
+        pass={pass2}
+        prereqMet={pass1?.state === 'accepted'}
+        prereqLabel="Complete Pass 1 first."
+        progress={progress?.passName === 'pass2' ? progress : null}
+        onRun={() => runPass2.mutate()}
+        isPending={runPass2.isPending}
+        reviewPath={`/projects/${projectId}/pass2`}
+        reviewLabel="Annotate →"
+      />
 
       {/* Pass 3 card */}
-      <div style={{
-        border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
-        opacity: pass2?.state === 'accepted' ? 1 : 0.4,
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>Pass 3 — Ball Color Tagging</h2>
-          <span style={{ color: STATE_COLOR[pass3?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
-            {STATE_LABELS[pass3?.state ?? 'not_started']}
-          </span>
-        </div>
-        <p style={{ color: '#555', fontSize: 14 }}>
-          Samples per-pixel color data from annotated ball patches to build a ball color profile.
-        </p>
+      <PassCard
+        title="Pass 3 — Ball Color Tagging"
+        description="Samples per-pixel color data from annotated ball patches to build a ball color profile."
+        pass={pass3}
+        prereqMet={pass2?.state === 'accepted'}
+        prereqLabel="Complete Pass 2 first."
+        progress={progress?.passName === 'pass3' ? progress : null}
+        onRun={() => runPass3.mutate()}
+        isPending={runPass3.isPending}
+        reviewPath={`/projects/${projectId}/pass3`}
+        reviewLabel="Review →"
+      />
 
-        {progress?.passName === 'pass3' && (pass3?.state === 'running' || pass3?.state === 'queued') && (
-          <div style={{ margin: '8px 0' }}>
-            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
-              <div style={{
-                width: `${Math.round(progress.fraction * 100)}%`,
-                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
-              }} />
-            </div>
-            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
-              {progress.stage} — {Math.round(progress.fraction * 100)}%
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          {pass2?.state === 'accepted' && (pass3?.state === 'not_started' || pass3?.state === 'failed') && (
-            <button
-              onClick={() => runPass3.mutate()}
-              disabled={runPass3.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer' }}
-            >
-              {runPass3.isPending ? 'Queuing…' : 'Run Pass 3'}
-            </button>
-          )}
-          {pass3?.state === 'waiting_for_user' && (
-            <button
-              onClick={() => navigate(`/projects/${projectId}/pass3`)}
-              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
-            >
-              Review →
-            </button>
-          )}
-          {pass3?.state === 'accepted' && (
-            <span style={{ color: '#090' }}>✓ Accepted</span>
-          )}
-          {(pass3?.state === 'waiting_for_user' || pass3?.state === 'accepted') && pass2?.state === 'accepted' && (
-            <button
-              onClick={() => runPass3.mutate()}
-              disabled={runPass3.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
-            >
-              {runPass3.isPending ? 'Queuing…' : 'Re-run'}
-            </button>
-          )}
-          {pass2?.state !== 'accepted' && (
-            <span style={{ color: '#aaa', fontSize: 14 }}>Complete Pass 2 first.</span>
-          )}
-        </div>
-      </div>
-
-      {/* Pass 4 card */}
-      <div style={{
-        border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
-        opacity: pass3?.state === 'accepted' ? 1 : 0.4,
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>Pass 4 — Ball Detection</h2>
-          <span style={{ color: STATE_COLOR[pass4?.state ?? ''] ?? '#aaa', fontWeight: 'bold' }}>
-            {STATE_LABELS[pass4?.state ?? 'not_started']}
-          </span>
-        </div>
-        <p style={{ color: '#555', fontSize: 14 }}>
-          Detects ball candidates in each frame using motion, color, and silhouette masks.
-        </p>
-
-        {progress?.passName === 'pass4' && (pass4?.state === 'running' || pass4?.state === 'queued') && (
-          <div style={{ margin: '8px 0' }}>
-            <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
-              <div style={{
-                width: `${Math.round(progress.fraction * 100)}%`,
-                background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
-              }} />
-            </div>
-            <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
-              {progress.stage} — {Math.round(progress.fraction * 100)}%
-            </div>
+      {/* Pass 4 card — also has pause/resume controls */}
+      <PassCard
+        title="Pass 4 — Ball Detection"
+        description="Detects ball candidates in each frame using motion, color, and silhouette masks."
+        pass={pass4}
+        prereqMet={pass3?.state === 'accepted'}
+        prereqLabel="Complete Pass 3 first."
+        progress={progress?.passName === 'pass4' ? progress : null}
+        onRun={() => runPass4.mutate()}
+        isPending={runPass4.isPending}
+        reviewPath={`/projects/${projectId}/pass4`}
+        reviewLabel="Review →"
+        extraControls={
+          progress?.passName === 'pass4' && (pass4?.state === 'running' || pass4?.state === 'queued') ? (
             <button
               onClick={() => progress.stage === 'paused'
                 ? api.resumePass4(projectId!)
@@ -325,43 +172,104 @@ export default function ProjectHome() {
             >
               {progress.stage === 'paused' ? 'Resume' : 'Pause'}
             </button>
-          </div>
-        )}
+          ) : null
+        }
+      />
+    </div>
+  )
+}
 
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          {pass3?.state === 'accepted' && (pass4?.state === 'not_started' || pass4?.state === 'failed') && (
-            <button
-              onClick={() => runPass4.mutate()}
-              disabled={runPass4.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer' }}
-            >
-              {runPass4.isPending ? 'Queuing…' : 'Run Pass 4'}
-            </button>
-          )}
-          {(pass4?.state === 'waiting_for_user' || progress?.passName === 'pass4' && progress.stage === 'paused') && (
-            <button
-              onClick={() => navigate(`/projects/${projectId}/pass4`)}
-              style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
-            >
-              Review →
-            </button>
-          )}
-          {pass4?.state === 'accepted' && (
-            <span style={{ color: '#090' }}>✓ Accepted</span>
-          )}
-          {(pass4?.state === 'waiting_for_user' || pass4?.state === 'accepted' || progress?.passName === 'pass4' && progress.stage === 'paused') && pass3?.state === 'accepted' && (
-            <button
-              onClick={() => runPass4.mutate()}
-              disabled={runPass4.isPending}
-              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
-            >
-              {runPass4.isPending ? 'Queuing…' : 'Re-run'}
-            </button>
-          )}
-          {pass3?.state !== 'accepted' && (
-            <span style={{ color: '#aaa', fontSize: 14 }}>Complete Pass 3 first.</span>
-          )}
+// ─── Shared pass card ─────────────────────────────────────────────────────────
+
+const IN_FLIGHT = new Set(['queued', 'running'])
+const RUNNABLE  = new Set(['not_started', 'failed', 'cancelled'])
+
+interface PassCardProps {
+  title: string
+  description: string
+  pass: { state: string } | undefined
+  prereqMet: boolean
+  prereqLabel: string
+  progress: { stage: string; fraction: number } | null
+  onRun: () => void
+  isPending: boolean
+  reviewPath: string
+  reviewLabel: string
+  extraControls?: React.ReactNode
+}
+
+function PassCard({
+  title, description, pass, prereqMet, prereqLabel,
+  progress, onRun, isPending, reviewPath, reviewLabel, extraControls,
+}: PassCardProps) {
+  const navigate = useNavigate()
+  const state = pass?.state ?? 'not_started'
+  const inFlight = IN_FLIGHT.has(state)
+
+  const rerunBtn = (
+    <button
+      onClick={onRun}
+      disabled={isPending}
+      style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+    >
+      {isPending ? 'Queuing…' : 'Re-run'}
+    </button>
+  )
+
+  return (
+    <div style={{
+      border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
+      opacity: prereqMet ? 1 : 0.4,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>{title}</h2>
+        <span style={{ color: STATE_COLOR[state] ?? '#aaa', fontWeight: 'bold' }}>
+          {STATE_LABELS[state] ?? state}
+        </span>
+      </div>
+      <p style={{ color: '#555', fontSize: 14 }}>{description}</p>
+
+      {/* Progress bar — shown while job is in flight */}
+      {inFlight && progress && (
+        <div style={{ margin: '8px 0' }}>
+          <div style={{ background: '#eee', borderRadius: 4, height: 8 }}>
+            <div style={{
+              width: `${Math.round(progress.fraction * 100)}%`,
+              background: '#09f', borderRadius: 4, height: 8, transition: 'width 0.3s',
+            }} />
+          </div>
+          <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>
+            {progress.stage} — {Math.round(progress.fraction * 100)}%
+          </div>
+          {extraControls}
         </div>
+      )}
+
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {!inFlight && prereqMet && RUNNABLE.has(state) && (
+          <button
+            onClick={onRun}
+            disabled={isPending}
+            style={{ padding: '6px 16px', cursor: 'pointer' }}
+          >
+            {isPending ? 'Queuing…' : state === 'not_started' ? `Run ${title.split('—')[0].trim()}` : 'Re-run'}
+          </button>
+        )}
+        {!inFlight && state === 'waiting_for_user' && (
+          <button
+            onClick={() => navigate(reviewPath)}
+            style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
+          >
+            {reviewLabel}
+          </button>
+        )}
+        {!inFlight && state === 'accepted' && (
+          <span style={{ color: '#090' }}>✓ Accepted</span>
+        )}
+        {!inFlight && prereqMet && (state === 'waiting_for_user' || state === 'accepted') && rerunBtn}
+        {!prereqMet && (
+          <span style={{ color: '#aaa', fontSize: 14 }}>{prereqLabel}</span>
+        )}
       </div>
     </div>
   )
