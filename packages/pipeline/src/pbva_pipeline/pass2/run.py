@@ -68,10 +68,12 @@ class Pass2:
         accepted_dir.mkdir(parents=True, exist_ok=True)
 
         annotations = corrections.annotations if corrections else {}
-        min_r = corrections.min_ball_radius if corrections else 4
-        max_r = corrections.max_ball_radius if corrections else 16
 
-        ann_data = {k: {"x": v.x, "y": v.y} for k, v in annotations.items()}
+        radii = [v.radius for v in annotations.values() if v.radius > 0]
+        min_r = round(min(radii)) if radii else 4
+        max_r = round(max(radii)) if radii else 16
+
+        ann_data = {k: {"x": v.x, "y": v.y, "radius": v.radius} for k, v in annotations.items()}
         (accepted_dir / "annotations.json").write_text(
             json.dumps({"annotations": ann_data}, indent=2)
         )

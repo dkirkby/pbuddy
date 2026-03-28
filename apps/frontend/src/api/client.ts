@@ -120,8 +120,8 @@ export const api = {
   getPass2Corrections: (projectId: string) =>
     get<{ ok: boolean; data: Pass2Corrections }>(`/api/projects/${projectId}/passes/pass2/corrections`),
 
-  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>, patches: Record<string, string>, minBallRadius: number, maxBallRadius: number) =>
-    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations, patches, min_ball_radius: minBallRadius, max_ball_radius: maxBallRadius }),
+  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>, patches: Record<string, string>) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations, patches }),
 
   acceptPass2: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),

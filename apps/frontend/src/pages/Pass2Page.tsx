@@ -11,13 +11,13 @@ const PATCH_RADIUS = BALL_PATCH_RADIUS
 const PATCH_DISPLAY_ZOOM = 2
 const PATCH_DISPLAY_SIZE = PATCH_RADIUS * 2 * PATCH_DISPLAY_ZOOM  // 128 px
 
-function RadiusOverlay({ minR, maxR }: { minR: number; maxR: number }) {
+function RadiusOverlay({ radius }: { radius: number }) {
+  if (radius <= 0) return null
   const c = PATCH_DISPLAY_SIZE / 2
   return (
     <svg style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
          width={PATCH_DISPLAY_SIZE} height={PATCH_DISPLAY_SIZE}>
-      <circle cx={c} cy={c} r={minR * PATCH_DISPLAY_ZOOM} fill="none" stroke="rgba(0,220,255,0.75)" strokeWidth={1} />
-      <circle cx={c} cy={c} r={maxR * PATCH_DISPLAY_ZOOM} fill="none" stroke="rgba(0,220,255,0.75)" strokeWidth={1} />
+      <circle cx={c} cy={c} r={radius * PATCH_DISPLAY_ZOOM} fill="none" stroke="rgba(255,60,60,0.85)" strokeWidth={1.5} />
     </svg>
   )
 }
@@ -38,8 +38,6 @@ export default function Pass2Page() {
   const [annotations, setAnnotations] = useState<Record<string, BallAnnotation>>({})
   const [patches, setPatches] = useState<Record<string, string>>({})
   const [patchOrder, setPatchOrder] = useState<string[]>([])
-  const [minBallRadius, setMinBallRadius] = useState(4)
-  const [maxBallRadius, setMaxBallRadius] = useState(16)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -101,8 +99,6 @@ export default function Pass2Page() {
         Object.keys(correctionsResp.data.patches).sort((a, b) => parseInt(b) - parseInt(a))
       )
     }
-    setMinBallRadius(correctionsResp.data.min_ball_radius ?? 4)
-    setMaxBallRadius(correctionsResp.data.max_ball_radius ?? 16)
     setDirty(false)
   }, [correctionsResp])
 
@@ -116,11 +112,11 @@ export default function Pass2Page() {
   }, [annotations])
 
   const handleVideoClick = useCallback(
-    (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null) => {
+    (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null, radius: number) => {
       const key = String(frameIndex)
       setAnnotations((prev) => ({
         ...prev,
-        [key]: { x: Math.round(bgX * 10) / 10, y: Math.round(bgY * 10) / 10 },
+        [key]: { x: Math.round(bgX * 10) / 10, y: Math.round(bgY * 10) / 10, radius },
       }))
       setPatches((prev) => patchDataUrl ? { ...prev, [key]: patchDataUrl } : prev)
       setPatchOrder((prev) => [key, ...prev.filter((k) => k !== key)])
@@ -142,7 +138,7 @@ export default function Pass2Page() {
     setSaving(true)
     setStatusMsg(null)
     try {
-      await api.savePass2Annotations(projectId!, annotations, patches, minBallRadius, maxBallRadius)
+      await api.savePass2Annotations(projectId!, annotations, patches)
       setDirty(false)
       qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
       setStatusMsg('Saved.')
@@ -209,31 +205,9 @@ export default function Pass2Page() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 24, alignItems: 'center', margin: '0 0 8px', fontSize: 13 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          Min ball radius (px):
-          <input
-            type="number"
-            min={2} max={32}
-            value={minBallRadius}
-            onChange={(e) => { setMinBallRadius(Math.max(2, Math.min(32, parseInt(e.target.value) || 2))); setDirty(true) }}
-            style={{ width: 52, padding: '2px 4px' }}
-          />
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          Max ball radius (px):
-          <input
-            type="number"
-            min={2} max={32}
-            value={maxBallRadius}
-            onChange={(e) => { setMaxBallRadius(Math.max(2, Math.min(32, parseInt(e.target.value) || 2))); setDirty(true) }}
-            style={{ width: 52, padding: '2px 4px' }}
-          />
-        </label>
-      </div>
-
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
-        Click on the ball to mark its centre. Use the × button on a patch to remove a mark.
+        Click on the ball centre, then drag outward to set the ball radius. Release to confirm.
+        Use the × button on a patch to remove a mark.
         {dirty && <span style={{ color: '#f90', marginLeft: 8 }}>⚠ Unsaved changes</span>}
       </p>
 
@@ -281,7 +255,6 @@ export default function Pass2Page() {
                 imageRendering: 'pixelated',
               }}
             />
-            <RadiusOverlay minR={minBallRadius} maxR={maxBallRadius} />
           </div>
           {patchOrder.length > 0 && (
             <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.15)', flexShrink: 0 }} />
@@ -302,7 +275,7 @@ export default function Pass2Page() {
                   imageRendering: 'pixelated',
                 }}
               />
-              <RadiusOverlay minR={minBallRadius} maxR={maxBallRadius} />
+              <RadiusOverlay radius={annotations[fi]?.radius ?? 0} />
               {/* Centering crosshair */}
               <div style={{
                 position: 'absolute', top: '50%', left: 0, right: 0,

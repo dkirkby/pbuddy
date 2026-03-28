@@ -77,6 +77,7 @@ type PlaybackState = 'stopped' | 'playing' | 'fast-forward' | 'fast-reverse'
 interface BallAnnotation {
   x: number
   y: number
+  radius?: number
 }
 
 interface Props {
@@ -89,7 +90,7 @@ interface Props {
   courtGeometry?: CourtGeometry
   totalFrames: number
   annotations?: Record<number, BallAnnotation>
-  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null) => void
+  onVideoClick?: (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null, radius: number) => void
   onFrameChange?: (frameIndex: number) => void
   ballCount?: number
   storageKey?: string
@@ -110,6 +111,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   const bgSubCanvasRef = useRef<HTMLCanvasElement>(null)
   const bgPlateRef = useRef<HTMLImageElement | null>(null)
   const mouseRef = useRef<{ x: number; y: number } | null>(null)
+  const dragStartRef = useRef<{ bgX: number; bgY: number; fi: number } | null>(null)
+  const pendingAnnRef = useRef<{ bgX: number; bgY: number; radius: number } | null>(null)
 
   useImperativeHandle(ref, () => ({
     seekToFrame: (fi) => {
@@ -248,21 +251,29 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     }
 
     // Draw ball annotation circles (current frame full opacity, ±5 frames faded).
+    // Red circle at annotated radius if radius > 0, otherwise fallback cyan circle.
     if (annotations) {
-      const R = 10
       ctx.lineWidth = 1.5
       for (const [fi, ann] of Object.entries(annotations)) {
         const dist = Math.abs(parseInt(fi, 10) - frameIndex)
         if (dist > 5) continue
         const opacity = dist === 0 ? 1.0 : 0.3
-        ctx.strokeStyle = `rgba(0, 220, 255, ${opacity})`
         const cx = ann.x * sx
         const cy = ann.y * sy
-        ctx.beginPath()
-        ctx.arc(cx, cy, R, 0, 2 * Math.PI)
-        ctx.stroke()
+        if (ann.radius && ann.radius > 0) {
+          ctx.strokeStyle = `rgba(255, 60, 60, ${opacity})`
+          ctx.beginPath()
+          ctx.arc(cx, cy, ann.radius * sx, 0, 2 * Math.PI)
+          ctx.stroke()
+        } else {
+          ctx.strokeStyle = `rgba(0, 220, 255, ${opacity})`
+          ctx.beginPath()
+          ctx.arc(cx, cy, 10, 0, 2 * Math.PI)
+          ctx.stroke()
+        }
       }
     }
+
 
     if (showCourt && courtGeometry) {
       const H = buildH(courtGeometry)
@@ -561,17 +572,47 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   const frameIndex = Math.round(currentTime * fps)
 
-  // ── Video click → annotation callback ──────────────────────────────────────
+  // ── Video pointer events → drag-to-set-radius annotation ──────────────────
+  // Pointer down: record centre. Pointer move: update radius. Pointer up: confirm.
 
-  function handleContainerClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!onVideoClick) return
+  function handleContainerPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     const video = videoRef.current
     if (!video) return
     const rect = e.currentTarget.getBoundingClientRect()
     const bgX = (e.clientX - rect.left) / video.clientWidth * bgWidth
     const bgY = (e.clientY - rect.top) / video.clientHeight * bgHeight
-    const fi = lastFrameIndexRef.current
+    dragStartRef.current = { bgX, bgY, fi: lastFrameIndexRef.current }
+    pendingAnnRef.current = { bgX, bgY, radius: 0 }
+    e.currentTarget.setPointerCapture(e.pointerId)
+    drawOverlay()
+  }
 
+  function handleContainerPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    if (!dragStartRef.current) return
+    const video = videoRef.current
+    if (!video) return
+    const bgX = (e.clientX - rect.left) / video.clientWidth * bgWidth
+    const bgY = (e.clientY - rect.top) / video.clientHeight * bgHeight
+    const dx = bgX - dragStartRef.current.bgX
+    const dy = bgY - dragStartRef.current.bgY
+    pendingAnnRef.current = {
+      bgX: dragStartRef.current.bgX,
+      bgY: dragStartRef.current.bgY,
+      radius: Math.round(Math.hypot(dx, dy) * 10) / 10,
+    }
+    drawOverlay()
+  }
+
+  function handleContainerPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragStartRef.current || !onVideoClick) return
+    const pending = pendingAnnRef.current!
+    const { fi } = dragStartRef.current
+    dragStartRef.current = null
+    pendingAnnRef.current = null
+
+    const video = videoRef.current!
     let patchDataUrl: string | null = null
     const size = PATCH_RADIUS * 2
     const offscreen = document.createElement('canvas')
@@ -584,7 +625,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         const scaleY = video.videoHeight / bgHeight
         pctx.drawImage(
           video,
-          (bgX - PATCH_RADIUS) * scaleX, (bgY - PATCH_RADIUS) * scaleY,
+          (pending.bgX - PATCH_RADIUS) * scaleX, (pending.bgY - PATCH_RADIUS) * scaleY,
           size * scaleX, size * scaleY,
           0, 0, size, size,
         )
@@ -594,10 +635,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       }
     }
 
-    onVideoClick(fi, bgX, bgY, patchDataUrl)
+    onVideoClick(fi, pending.bgX, pending.bgY, patchDataUrl, pending.radius)
   }
 
   // ── Live patch preview (drawn into an external canvas supplied by the parent) ─
+  // During drag: patch is frozen at the drag-start centre; red radius circle is drawn.
+  // Otherwise: patch follows mouse cursor with a crosshair.
 
   useEffect(() => {
     if (!mouseOverVideo || !previewCanvasRef?.current) return
@@ -605,14 +648,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     function tick() {
       const video = videoRef.current
       const canvas = previewCanvasRef!.current
-      const pos = mouseRef.current
-      if (video && canvas && pos) {
+      const drag = dragStartRef.current
+      const bgX = drag ? drag.bgX : (mouseRef.current ? mouseRef.current.x / video!.clientWidth * bgWidth : null)
+      const bgY = drag ? drag.bgY : (mouseRef.current ? mouseRef.current.y / video!.clientHeight * bgHeight : null)
+      if (video && canvas && bgX !== null && bgY !== null) {
         const ctx = canvas.getContext('2d')
         if (ctx) {
           const cw = canvas.width
           const ch = canvas.height
-          const bgX = pos.x / video.clientWidth * bgWidth
-          const bgY = pos.y / video.clientHeight * bgHeight
           const scaleX = video.videoWidth / bgWidth
           const scaleY = video.videoHeight / bgHeight
           try {
@@ -625,13 +668,23 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           } catch {
             ctx.clearRect(0, 0, cw, ch)
           }
-          // Crosshair at centre
-          ctx.strokeStyle = 'rgba(0, 220, 255, 0.6)'
-          ctx.lineWidth = 1
-          ctx.beginPath()
-          ctx.moveTo(cw / 2, 0); ctx.lineTo(cw / 2, ch)
-          ctx.moveTo(0, ch / 2); ctx.lineTo(cw, ch / 2)
-          ctx.stroke()
+          if (drag && pendingAnnRef.current) {
+            // Red radius circle — radius is in bg-plate pixels = canvas pixels (1:1 mapping).
+            const r = pendingAnnRef.current.radius
+            ctx.strokeStyle = 'rgba(255, 60, 60, 0.85)'
+            ctx.lineWidth = 1.5
+            ctx.beginPath()
+            ctx.arc(cw / 2, ch / 2, Math.max(r, 1), 0, 2 * Math.PI)
+            ctx.stroke()
+          } else {
+            // Crosshair while hovering
+            ctx.strokeStyle = 'rgba(0, 220, 255, 0.6)'
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(cw / 2, 0); ctx.lineTo(cw / 2, ch)
+            ctx.moveTo(0, ch / 2); ctx.lineTo(cw, ch / 2)
+            ctx.stroke()
+          }
         }
       }
       rafId = requestAnimationFrame(tick)
@@ -652,13 +705,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
           position: 'relative', display: 'inline-block', maxWidth: '100%',
           cursor: onVideoClick ? CIRCLE_CURSOR : 'default',
         }}
-        onClick={handleContainerClick}
-        onMouseMove={onVideoClick ? (e) => {
-          const rect = e.currentTarget.getBoundingClientRect()
-          mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
-        } : undefined}
+        onPointerDown={onVideoClick ? handleContainerPointerDown : undefined}
+        onPointerMove={onVideoClick ? handleContainerPointerMove : undefined}
+        onPointerUp={onVideoClick ? handleContainerPointerUp : undefined}
         onMouseEnter={onVideoClick ? () => setMouseOverVideo(true) : undefined}
-        onMouseLeave={onVideoClick ? () => { setMouseOverVideo(false); mouseRef.current = null } : undefined}
+        onMouseLeave={onVideoClick ? () => {
+          // Don't stop the preview loop while a drag is in progress (pointer capture keeps events firing).
+          if (!dragStartRef.current) { setMouseOverVideo(false); mouseRef.current = null }
+        } : undefined}
       >
         <video
           ref={videoRef}

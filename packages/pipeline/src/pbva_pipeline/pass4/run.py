@@ -117,6 +117,9 @@ class Pass4:
         patches_dir.mkdir(parents=True, exist_ok=True)
         open_kernel  = np.ones((5, 5), np.uint8)
         close_kernel = np.ones((9, 9), np.uint8)
+        motion_ksize = open_kernel.shape[0]
+        color_ksize  = close_kernel.shape[0]
+        max_blob_radius = max_ball_radius + max(motion_ksize, color_ksize)
         bg_h, bg_w   = bg_plate.shape[:2]
         half = 32   # patch half-size → 64×64 output
         stable_frame_count = 0
@@ -186,7 +189,7 @@ class Pass4:
             contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for contour in contours:
                 (cx, cy), radius = cv2.minEnclosingCircle(contour)
-                if min_blob_radius <= radius <= max_ball_radius:
+                if min_blob_radius <= radius <= max_blob_radius:
                     area = cv2.contourArea(contour)
                     perimeter = cv2.arcLength(contour, closed=True)
                     detections.append({

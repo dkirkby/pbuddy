@@ -63,13 +63,17 @@ class Pass3:
             h, w = bgr.shape[:2]
             cx, cy = w / 2.0, h / 2.0
 
+            # Use the per-annotation radius if available, otherwise fall back to rmin.
+            ann_radius = ann.get("radius", 0) if isinstance(ann, dict) else 0
+            sample_radius = ann_radius if ann_radius > 0 else rmin
+
             # Convert entire patch to HSV once (H: 0–180, S: 0–255, V: 0–255).
             hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
 
             for py in range(h):
                 for px in range(w):
                     dist = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
-                    if dist <= rmin:
+                    if dist <= sample_radius:
                         b, g, r = int(bgr[py, px, 0]), int(bgr[py, px, 1]), int(bgr[py, px, 2])
                         hv, sv, vv = int(hsv[py, px, 0]), int(hsv[py, px, 1]), int(hsv[py, px, 2])
                         rows.append((r, g, b, hv, sv, vv))

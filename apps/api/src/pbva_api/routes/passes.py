@@ -398,8 +398,6 @@ def get_pass2_corrections(
     return {"ok": True, "data": {
         **data,
         "patches": patches,
-        "min_ball_radius": data.get("min_ball_radius", 4),
-        "max_ball_radius": data.get("max_ball_radius", 16),
     }}
 
 
@@ -421,21 +419,15 @@ def save_pass2_corrections(
     from pbva_pipeline.pass2.run import Pass2
     corrections = Pass2().validate_corrections({
         "annotations": body.get("annotations", {}),
-        "min_ball_radius": body.get("min_ball_radius", 4),
-        "max_ball_radius": body.get("max_ball_radius", 16),
     })
 
     from pbva_core import paths as p
     corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
     corrections_dir.mkdir(parents=True, exist_ok=True)
 
-    ann_data = {k: {"x": v.x, "y": v.y} for k, v in corrections.annotations.items()}
+    ann_data = {k: {"x": v.x, "y": v.y, "radius": v.radius} for k, v in corrections.annotations.items()}
     ann_path = corrections_dir / "annotations.json"
-    ann_path.write_text(json.dumps({
-        "annotations": ann_data,
-        "min_ball_radius": corrections.min_ball_radius,
-        "max_ball_radius": corrections.max_ball_radius,
-    }, indent=2))
+    ann_path.write_text(json.dumps({"annotations": ann_data}, indent=2))
 
     # Write patches: clear old files, write the complete current set.
     patches_dir = corrections_dir / "patches" / "raw"
