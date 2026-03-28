@@ -132,25 +132,28 @@ class Pass4:
             # the *next* frame, so the frame we hold is one behind that.
             frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
 
-            # Check for pause signal every 30 frames (~1 s at 30 fps).
-            if i % 30 == 0 and pause_file.exists():
-                current_fraction = 0.1 + 0.88 * i / total_frames
-                # Write partial results so the UI can show them while paused.
-                (raw_dir / "detections.json").write_text(json.dumps({
-                    "stable_frame_count": stable_frame_count,
-                    "first_stable_frame": in_frame,
-                    "last_stable_frame":  frame_idx - 1,
-                    "max_ball_radius":    max_ball_radius,
-                    "detection_count":    len(detections),
-                    "detections":         detections,
-                    "paused":             True,
-                }, indent=2))
-                while pause_file.exists():
-                    progress.update(
-                        current_fraction, "paused",
-                        f"Paused at frame {frame_idx} — {len(detections)} detections so far",
-                    )
-                    time.sleep(1.0)
+            # Check for pause/cancel signal every 30 frames (~1 s at 30 fps).
+            if i % 30 == 0:
+                progress.check_cancelled()
+                if pause_file.exists():
+                    current_fraction = 0.1 + 0.88 * i / total_frames
+                    # Write partial results so the UI can show them while paused.
+                    (raw_dir / "detections.json").write_text(json.dumps({
+                        "stable_frame_count": stable_frame_count,
+                        "first_stable_frame": in_frame,
+                        "last_stable_frame":  frame_idx - 1,
+                        "max_ball_radius":    max_ball_radius,
+                        "detection_count":    len(detections),
+                        "detections":         detections,
+                        "paused":             True,
+                    }, indent=2))
+                    while pause_file.exists():
+                        progress.check_cancelled()
+                        progress.update(
+                            current_fraction, "paused",
+                            f"Paused at frame {frame_idx} — {len(detections)} detections so far",
+                        )
+                        time.sleep(1.0)
 
             if i % 150 == 0:
                 progress.update(

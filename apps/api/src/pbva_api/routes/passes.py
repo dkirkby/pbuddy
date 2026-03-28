@@ -83,10 +83,38 @@ def run_pass(
             detail=f"Pass {pass_name} cannot be run from state '{pass_row.state}'",
         )
 
+    # When an upstream pass is re-run, cancel any actively running pass4 job so
+    # the worker is freed up to process the newly queued job.
+    if pass_name in ("pass1", "pass2", "pass3"):
+        pass4_row = db.execute(
+            select(Pass)
+            .where(Pass.project_id == project_id)
+            .where(Pass.pass_name == "pass4")
+        ).scalar_one_or_none()
+        if pass4_row and pass4_row.current_job_id:
+            p4_job = db.get(Job, pass4_row.current_job_id)
+            if p4_job and p4_job.status == "running":
+                p4_job.status = "cancel_requested"
+                _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
+                pass4_row.state = PassState.cancelled.value
+                pass4_row.updated_at = _utcnow()
+
     # If pass4 is paused, remove the sentinel so the stalled job can finish
     # and the worker can then pick up the new job.
     if pass_name == "pass4":
         _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
+
+    # Clear pass4 raw outputs when re-running so stale patches and detections
+    # are not mixed with results from the new run.
+    if pass_name == "pass4":
+        import shutil as _shutil
+        from pbva_core import paths as _p
+        p4_raw = _p.pass_raw_dir(settings.data_root, project_id, "pass4")
+        for _fname in ("detections.json", "detections_map.png"):
+            (p4_raw / _fname).unlink(missing_ok=True)
+        _patches = p4_raw / "patches"
+        if _patches.exists():
+            _shutil.rmtree(_patches)
 
     # Clear pass2 corrections (annotations + patches) so a re-run starts fresh.
     if pass_name == "pass2":
