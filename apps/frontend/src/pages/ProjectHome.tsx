@@ -255,7 +255,8 @@ function PassCard({
             {isPending ? 'Queuing…' : state === 'not_started' ? `Run ${title.split('—')[0].trim()}` : 'Re-run'}
           </button>
         )}
-        {!inFlight && state === 'waiting_for_user' && (
+        {/* Review button: always shown when waiting_for_user, or while paused (partial results available) */}
+        {((!inFlight && state === 'waiting_for_user') || progress?.stage === 'paused') && (
           <button
             onClick={() => navigate(reviewPath)}
             style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
