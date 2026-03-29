@@ -9,8 +9,22 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from pbva_core.types import Pass1AcceptedOutput
+from pbva_core.types import Pass1AcceptedOutput, Pass1RawResult
 from pbva_pipeline.base import PassContext
+
+
+def _select_bg_index(frame_idx: int, fps: float, window_times: list) -> int:
+    """Return the index of the median background whose midpoint is closest to frame_idx."""
+    if len(window_times) <= 1:
+        return 0
+    t = frame_idx / fps
+    best, best_dist = 0, float('inf')
+    for k, (ws, we) in enumerate(window_times):
+        dist = abs((ws + we) / 2 - t)
+        if dist < best_dist:
+            best_dist = dist
+            best = k
+    return best
 
 
 def detect_motion(frame, bg_blur, close_kernel, blur=3, threshold=25):
@@ -47,7 +61,7 @@ class Pass4:
             raise FileNotFoundError("Pass 1 accepted result.json not found")
         if not (pass1_accepted / "tent_mask.png").exists():
             raise FileNotFoundError("Pass 1 tent_mask.png not found")
-        bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
+        bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background_0.png"
         if not bg_path.exists():
             raise FileNotFoundError(f"Median background not found: {bg_path}")
         p2_result = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json"
@@ -70,10 +84,19 @@ class Pass4:
         in_time_s  = p1.stable_bounds.in_time_s
         out_time_s = p1.stable_bounds.out_time_s
 
-        progress.update(0.04, "setup", "Loading background plate and tent mask…")
-        bg_plate = cv2.imread(str(pass1_dir / "raw" / "median_background.png"))
+        progress.update(0.03, "setup", "Loading pass 1 raw result…")
+        p1_raw = Pass1RawResult.model_validate_json(
+            (pass1_dir / "raw" / "result.json").read_text()
+        )
+
+        progress.update(0.04, "setup", "Loading background plates and tent mask…")
+        bg_blurs: list[np.ndarray] = []
+        for rel_path in p1_raw.median_background_paths:
+            plate = cv2.imread(str(ctx.paths.project_root / rel_path))
+            bg_blurs.append(cv2.medianBlur(plate, 3))
+        window_times = p1_raw.median_window_times
+        bg_plate = cv2.imread(str(ctx.paths.project_root / p1_raw.median_background_paths[0]))
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
-        bg_blur   = cv2.medianBlur(bg_plate, 3)
 
         progress.update(0.05, "setup", "Loading max ball radius and annotations from pass 2…")
         p2_result = json.loads(
@@ -162,7 +185,8 @@ class Pass4:
                     f"Frame {frame_idx} of {out_frame}…",
                 )
 
-            # --- Motion mask ---
+            # --- Motion mask (use temporally closest median background) ---
+            bg_blur = bg_blurs[_select_bg_index(frame_idx, fps, window_times)]
             motion_mask = detect_motion(frame, bg_blur, close_kernel)
 
             # --- H-S and V-S color masks (each cleaned separately) ---
