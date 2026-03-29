@@ -193,7 +193,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   // ── Canvas drawing ──────────────────────────────────────────────────────────
 
   // mediaTime: exact PTS from requestVideoFrameCallback; omit to read video.currentTime.
-  const drawOverlay = useCallback((mediaTime?: number) => {
+  const drawOverlay = useCallback((mediaTime?: number, skipFrameUpdate = false) => {
     const video = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return
@@ -208,16 +208,22 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    const t = mediaTime ?? video.currentTime
-    // Only trust frame index from rVFC mediaTime — video.currentTime has the PTS
-    // offset bug (gives N instead of N+1). When called without mediaTime (e.g.
-    // from pointer move to redraw the pending circle), keep the last rVFC value.
-    const frameIndex = mediaTime !== undefined
-      ? Math.round(t * fps)
-      : lastFrameIndexRef.current
-    if (mediaTime !== undefined) lastFrameIndexRef.current = frameIndex
+    // Three cases for frame index:
+    //   rVFC (mediaTime provided):       Math.round(mediaTime * fps) — exact PTS, gives N+1
+    //   onSeeked / other (no mediaTime): Math.round(video.currentTime * fps) — seek position N/fps gives N
+    //   pointer-move redraw (skipFrameUpdate=true): keep existing lastFrameIndexRef unchanged
+    let frameIndex: number
+    if (skipFrameUpdate) {
+      frameIndex = lastFrameIndexRef.current
+    } else if (mediaTime !== undefined) {
+      frameIndex = Math.round(mediaTime * fps)
+      lastFrameIndexRef.current = frameIndex
+    } else {
+      frameIndex = Math.round(video.currentTime * fps)
+      lastFrameIndexRef.current = frameIndex
+    }
     const dets = detections ? (detections[frameIndex] ?? []) : []
-    setCurrentTime(t)
+    setCurrentTime(mediaTime ?? video.currentTime)
     setDetCount(dets.length)
     onFrameChange?.(frameIndex)
 
@@ -589,7 +595,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     dragStartRef.current = { bgX, bgY, fi: lastFrameIndexRef.current }
     pendingAnnRef.current = { bgX, bgY, radius: 0 }
     e.currentTarget.setPointerCapture(e.pointerId)
-    drawOverlay()
+    drawOverlay(undefined, true)
   }
 
   function handleContainerPointerMove(e: React.PointerEvent<HTMLDivElement>) {
@@ -607,7 +613,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       bgY: dragStartRef.current.bgY,
       radius: Math.round(Math.hypot(dx, dy) * 10) / 10,
     }
-    drawOverlay()
+    drawOverlay(undefined, true)
   }
 
   function handleContainerPointerUp(e: React.PointerEvent<HTMLDivElement>) {
