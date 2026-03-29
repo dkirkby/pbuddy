@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
 import type { VideoPlayerHandle } from '../components/VideoPlayer'
-import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass2RawResult } from '../types/api'
+import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass1RawResult, Pass2RawResult } from '../types/api'
 import { BALL_PATCH_RADIUS } from '../lib/dimensions'
 
 const PATCH_RADIUS = BALL_PATCH_RADIUS
@@ -61,18 +61,24 @@ export default function Pass2Page() {
     enabled: !!resultArtifact,
   })
 
-  // Load pass1 accepted result for court geometry.
+  const [currentFrameIndex, setCurrentFrameIndex] = useState(0)
+
+  // Load pass1 artifacts for court geometry, bg plates, and window times.
   const { data: pass1ArtResp } = useQuery({
     queryKey: ['pass1-artifacts-accepted', projectId],
     queryFn: () => api.getPass1Artifacts(projectId!),
   })
-  const pass1AcceptedArt = (pass1ArtResp?.data ?? []).find(
+  const pass1ArtifactList: ArtifactRef[] = pass1ArtResp?.data ?? []
+  const pass1AcceptedArt = pass1ArtifactList.find(
     (a) => a.artifact_role === 'accepted' && a.artifact_type === 'json'
   )
-  const bgPlateArtifact = (pass1ArtResp?.data ?? []).find(
-    (a) => a.artifact_role === 'raw' && a.artifact_type === 'png'
+  const pass1RawJsonArt = pass1ArtifactList.find(
+    (a) => a.artifact_role === 'raw' && a.artifact_type === 'json'
   )
-  const bgPlateUrl = bgPlateArtifact ? api.artifactUrl(bgPlateArtifact.id) : undefined
+  const bgArtifacts = pass1ArtifactList
+    .filter((a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background'))
+    .sort((a, b) => a.path.localeCompare(b.path))
+
   const { data: pass1Accepted } = useQuery<Pass1AcceptedOutput>({
     queryKey: ['pass1-accepted', projectId],
     queryFn: async () => {
@@ -81,6 +87,34 @@ export default function Pass2Page() {
     },
     enabled: !!pass1AcceptedArt,
   })
+  const { data: pass1Raw } = useQuery<Pass1RawResult>({
+    queryKey: ['pass1-raw', projectId],
+    queryFn: async () => {
+      const resp = await fetch(api.artifactUrl(pass1RawJsonArt!.id))
+      return resp.json()
+    },
+    enabled: !!pass1RawJsonArt,
+  })
+
+  // Select the median background whose time-window midpoint is closest to the current frame.
+  const bgPlateUrl = useMemo(() => {
+    if (bgArtifacts.length === 0) return undefined
+    const windowTimes = pass1Raw?.median_window_times
+    if (!windowTimes || windowTimes.length <= 1) {
+      return api.artifactUrl(bgArtifacts[0].id)
+    }
+    const fps_ = resultData?.fps ?? 30
+    const t = currentFrameIndex / fps_
+    let best = 0
+    let bestDist = Infinity
+    for (let i = 0; i < windowTimes.length; i++) {
+      const mid = (windowTimes[i][0] + windowTimes[i][1]) / 2
+      const dist = Math.abs(mid - t)
+      if (dist < bestDist) { bestDist = dist; best = i }
+    }
+    const idx = Math.min(best, bgArtifacts.length - 1)
+    return api.artifactUrl(bgArtifacts[idx].id)
+  }, [currentFrameIndex, bgArtifacts, pass1Raw, resultData])
 
   // Load saved annotations and patches on mount.
   const { data: correctionsResp } = useQuery({
@@ -230,6 +264,7 @@ export default function Pass2Page() {
           courtGeometry={pass1Accepted?.court_geometry}
           annotations={annotationsById}
           onVideoClick={handleVideoClick}
+          onFrameChange={setCurrentFrameIndex}
           ballCount={ballCount}
           storageKey={`pass2-pos-${projectId}`}
           previewCanvasRef={previewRef}
