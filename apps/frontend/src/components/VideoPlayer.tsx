@@ -209,8 +209,13 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const t = mediaTime ?? video.currentTime
-    const frameIndex = Math.round(t * fps)
-    lastFrameIndexRef.current = frameIndex
+    // Only trust frame index from rVFC mediaTime — video.currentTime has the PTS
+    // offset bug (gives N instead of N+1). When called without mediaTime (e.g.
+    // from pointer move to redraw the pending circle), keep the last rVFC value.
+    const frameIndex = mediaTime !== undefined
+      ? Math.round(t * fps)
+      : lastFrameIndexRef.current
+    if (mediaTime !== undefined) lastFrameIndexRef.current = frameIndex
     const dets = detections ? (detections[frameIndex] ?? []) : []
     setCurrentTime(t)
     setDetCount(dets.length)
