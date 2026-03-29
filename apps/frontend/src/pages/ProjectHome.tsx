@@ -44,11 +44,9 @@ export default function ProjectHome() {
 
   useProjectWebSocket(projectId ?? null, (msg) => {
     if (msg.type === 'job_progress') {
-      setProgress({
-        passName: msg.payload.pass_name as string,
-        stage: msg.payload.stage as string,
-        fraction: msg.payload.progress as number,
-      })
+      const p = { passName: msg.payload.pass_name as string, stage: msg.payload.stage as string, fraction: msg.payload.progress as number }
+      console.log('[progress]', p.passName, p.stage, (p.fraction * 100).toFixed(1) + '%')
+      setProgress(p)
     } else if (msg.type === 'pass_waiting_for_user' || msg.type === 'pass_accepted') {
       setProgress(null)
       qc.invalidateQueries({ queryKey: ['project', projectId] })

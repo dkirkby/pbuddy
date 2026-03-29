@@ -134,6 +134,7 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
             for i, art in enumerate(artifact_dicts):
                 if art["type"] == "png" and "median_background" in art["path"]:
                     median_bg_artifact_id = art_ids[i]
+                    break
 
         # Update pass state.
         pass_row = session.execute(

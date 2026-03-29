@@ -107,9 +107,10 @@ class CourtGeometry(BaseModel):
 
 class Pass1RawResult(BaseModel):
     stable_bounds: StableBounds
-    median_background_path: str   # relative to project root
-    bg_width: int                 # actual pixel width of median_background.png
-    bg_height: int                # actual pixel height of median_background.png
+    median_background_paths: list[str]               # relative to project root, one per window
+    median_window_times: list[tuple[float, float]]   # (start_s, end_s) per window
+    bg_width: int                                    # pixel width of background images
+    bg_height: int                                   # pixel height of background images
 
 
 class Pass1CorrectionPayload(BaseModel):

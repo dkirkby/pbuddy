@@ -62,7 +62,8 @@ export interface StableBounds {
 
 export interface Pass1RawResult {
   stable_bounds: StableBounds
-  median_background_path: string
+  median_background_paths: string[]
+  median_window_times: [number, number][]
   bg_width: number
   bg_height: number
 }

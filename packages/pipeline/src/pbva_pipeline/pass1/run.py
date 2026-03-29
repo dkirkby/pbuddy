@@ -144,9 +144,8 @@ class Pass1:
             progress = NullProgress()
 
         raw_dir = ctx.paths.pass_raw_dir
-        bg_path = raw_dir / "median_background.png"
 
-        # --- Single-pass scan: stable bounds + median background ---
+        # --- Single-pass scan: stable bounds + median backgrounds ---
         progress.update(0.0, "scan_video", "Scanning video…")
         progress.check_cancelled()
 
@@ -154,24 +153,33 @@ class Pass1:
             progress.update(frac, "scan_video", msg)
             progress.check_cancelled()
 
-        bounds, median_bg = scan_video(
+        bounds, medians, window_times = scan_video(
             ctx.video_path,
             ctx.video_duration_s,
-            target_samples=300,
-            output_path=bg_path,
             progress_callback=_scan_progress,
             progress_start=0.0,
             progress_end=0.95,
         )
         progress.update(0.95, "scan_video",
-                        f"Stable: {bounds.in_time_s:.1f}s – {bounds.out_time_s:.1f}s")
+                        f"Stable: {bounds.in_time_s:.1f}s – {bounds.out_time_s:.1f}s, "
+                        f"{len(medians)} background(s)")
+
+        # Save median images and record paths.
+        bg_paths = []
+        for k, med in enumerate(medians):
+            bg_path = raw_dir / f"median_background_{k}.png"
+            cv2.imwrite(str(bg_path), med)
+            bg_paths.append(bg_path)
 
         # --- Write raw result JSON ---
         progress.update(0.95, "write_outputs", "Writing raw result…")
-        bg_h, bg_w = median_bg.shape[:2]
+        bg_h, bg_w = medians[0].shape[:2]
         result = Pass1RawResult(
             stable_bounds=bounds,
-            median_background_path=str(bg_path.relative_to(ctx.paths.project_root)),
+            median_background_paths=[
+                str(p.relative_to(ctx.paths.project_root)) for p in bg_paths
+            ],
+            median_window_times=window_times,
             bg_width=bg_w,
             bg_height=bg_h,
         )
@@ -182,10 +190,12 @@ class Pass1:
 
     def write_raw_outputs(self, ctx: PassContext, result: Pass1RawResult) -> list[dict]:
         raw_dir = ctx.paths.pass_raw_dir
-        artifacts = [
-            {"role": "raw", "type": "json", "path": str(raw_dir / "result.json")},
-            {"role": "raw", "type": "png", "path": str(raw_dir / "median_background.png")},
-        ]
+        artifacts = [{"role": "raw", "type": "json", "path": str(raw_dir / "result.json")}]
+        for k in range(len(result.median_background_paths)):
+            artifacts.append({
+                "role": "raw", "type": "png",
+                "path": str(raw_dir / f"median_background_{k}.png"),
+            })
         return [a for a in artifacts if Path(a["path"]).exists()]
 
     def validate_corrections(self, payload: dict) -> Pass1CorrectionPayload:

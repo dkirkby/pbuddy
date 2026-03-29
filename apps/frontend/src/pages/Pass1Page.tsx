@@ -29,6 +29,7 @@ export default function Pass1Page() {
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  const [bgIndex, setBgIndex] = useState(0)
 
   // Load artifacts for pass1.
   const { data: artResp } = useQuery({
@@ -39,9 +40,11 @@ export default function Pass1Page() {
   const rawJsonArtifact = artifacts.find(
     (a) => a.artifact_role === 'raw' && a.artifact_type === 'json'
   )
-  const bgArtifact = artifacts.find(
+  const bgArtifacts = artifacts.filter(
     (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background')
   )
+  const clampedBgIndex = Math.min(bgIndex, Math.max(0, bgArtifacts.length - 1))
+  const bgArtifact = bgArtifacts[clampedBgIndex] ?? null
 
   // Load raw result JSON (needed for stable_bounds).
   const { data: rawResult } = useQuery<Pass1RawResult>({
@@ -106,6 +109,7 @@ export default function Pass1Page() {
   }
 
   const bgUrl = bgArtifact ? api.artifactUrl(bgArtifact.id) : null
+  const windowTime = rawResult?.median_window_times?.[clampedBgIndex]
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -154,7 +158,35 @@ export default function Pass1Page() {
 
         {/* ── Right column: image ── */}
         <div style={{ flex: '1 1 600px' }}>
-          <h3 style={{ marginTop: 0 }}>Median Background</h3>
+          <h3 style={{ marginTop: 0 }}>
+            Median Background
+            {bgArtifacts.length > 0 && ` (${bgArtifacts.length} total)`}
+          </h3>
+          {bgArtifacts.length > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 13 }}>
+              <button
+                onClick={() => setBgIndex(i => Math.max(0, i - 1))}
+                disabled={clampedBgIndex === 0}
+                style={{ padding: '2px 8px' }}
+              >←</button>
+              <span>{clampedBgIndex + 1} / {bgArtifacts.length}</span>
+              <button
+                onClick={() => setBgIndex(i => Math.min(bgArtifacts.length - 1, i + 1))}
+                disabled={clampedBgIndex === bgArtifacts.length - 1}
+                style={{ padding: '2px 8px' }}
+              >→</button>
+              {windowTime && (
+                <span style={{ color: '#555' }}>
+                  {fmtTime(windowTime[0])} – {fmtTime(windowTime[1])}
+                </span>
+              )}
+            </div>
+          )}
+          {bgArtifacts.length === 1 && windowTime && (
+            <div style={{ fontSize: 13, color: '#555', marginBottom: 8 }}>
+              {fmtTime(windowTime[0])} – {fmtTime(windowTime[1])}
+            </div>
+          )}
           <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
             Drag the blue handles to align the four court corners. Interior lines and net are computed automatically.
           </p>
