@@ -85,6 +85,7 @@ def run_pass(
     if pass_row is None:
         # Project pre-dates this pass being added — create the row on demand.
         pass_row = Pass(
+            id=str(uuid.uuid4()),
             project_id=project_id,
             pass_name=pass_name,
             state=PassState.not_started.value,
