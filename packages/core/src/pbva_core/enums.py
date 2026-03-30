@@ -17,6 +17,8 @@ class ProjectStatus(str, Enum):
     pass3_accepted = "pass3_accepted"
     pass4_waiting_for_review = "pass4_waiting_for_review"
     pass4_accepted = "pass4_accepted"
+    pass5_waiting_for_review = "pass5_waiting_for_review"
+    pass5_accepted = "pass5_accepted"
     replay_ready = "replay_ready"
 
 

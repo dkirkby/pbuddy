@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
 import type { VideoPlayerHandle } from '../components/VideoPlayer'
@@ -16,8 +16,18 @@ interface BallDetection {
 export default function Pass4Page() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const playerRef = useRef<VideoPlayerHandle>(null)
   const [currentFrame, setCurrentFrame] = useState(0)
+  const [accepting, setAccepting] = useState(false)
+
+  const acceptPass4 = useMutation({
+    mutationFn: () => api.acceptPass4(projectId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      navigate(`/projects/${projectId}`)
+    },
+  })
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
@@ -123,16 +133,25 @@ export default function Pass4Page() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <h1 style={{ margin: 0 }}>Pass 4 — Ball Detection Review</h1>
-        <div style={{ fontSize: 13, color: '#555' }}>
-          {isPaused && <span style={{ color: '#f90', marginRight: 12 }}>⏸ Paused</span>}
-          {detectionsData && (
-            <span>
-              {totalDetections} detections
-              {detectionsData.stable_frame_count > 0 && (
-                <> in {detectionsData.stable_frame_count} frames</>
-              )}
-            </span>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ fontSize: 13, color: '#555' }}>
+            {isPaused && <span style={{ color: '#f90', marginRight: 12 }}>⏸ Paused</span>}
+            {detectionsData && (
+              <span>
+                {totalDetections} detections
+                {detectionsData.stable_frame_count > 0 && (
+                  <> in {detectionsData.stable_frame_count} frames</>
+                )}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => { setAccepting(true); acceptPass4.mutate() }}
+            disabled={accepting || acceptPass4.isPending || !detectionsData}
+            style={{ padding: '6px 18px', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+          >
+            {accepting ? 'Accepting…' : 'Accept Pass 4 →'}
+          </button>
         </div>
       </div>
 

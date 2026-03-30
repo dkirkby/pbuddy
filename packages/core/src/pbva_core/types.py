@@ -154,3 +154,29 @@ class Pass2AcceptedOutput(BaseModel):
     annotation_count: int
     min_ball_radius: int
     max_ball_radius: int
+
+
+# ---------------------------------------------------------------------------
+# Pass 4 domain types
+# ---------------------------------------------------------------------------
+
+
+class Pass4AcceptedOutput(BaseModel):
+    detection_count: int
+    first_stable_frame: int
+    last_stable_frame: int
+
+
+# ---------------------------------------------------------------------------
+# Pass 5 domain types
+# ---------------------------------------------------------------------------
+
+
+class Pass5RawResult(BaseModel):
+    segment_count: int
+    max_gap_frames: int
+    max_pixels_per_frame: float
+
+
+class Pass5AcceptedOutput(BaseModel):
+    segment_count: int

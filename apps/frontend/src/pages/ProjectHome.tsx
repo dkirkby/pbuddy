@@ -81,12 +81,21 @@ export default function ProjectHome() {
     },
   })
 
+  const runPass5 = useMutation({
+    mutationFn: () => api.runPass5(projectId!),
+    onSuccess: () => {
+      setProgress(null)
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+    },
+  })
+
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
   const pass2 = project.passes.find((p) => p.pass_name === 'pass2')
   const pass3 = project.passes.find((p) => p.pass_name === 'pass3')
   const pass4 = project.passes.find((p) => p.pass_name === 'pass4')
+  const pass5 = project.passes.find((p) => p.pass_name === 'pass5')
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -172,6 +181,20 @@ export default function ProjectHome() {
             </button>
           ) : null
         }
+      />
+
+      {/* Pass 5 card */}
+      <PassCard
+        title="Pass 5 — Segment Building"
+        description="Groups ball detections in consecutive frames into trajectory segments."
+        pass={pass5}
+        prereqMet={pass4?.state === 'accepted'}
+        prereqLabel="Complete Pass 4 first."
+        progress={progress?.passName === 'pass5' ? progress : null}
+        onRun={() => runPass5.mutate()}
+        isPending={runPass5.isPending}
+        reviewPath={`/projects/${projectId}/pass5`}
+        reviewLabel="Review →"
       />
     </div>
   )

@@ -22,7 +22,7 @@ from pbva_api.dependencies import get_db, get_settings
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
-PASS_NAMES = ["pass1", "pass2", "pass3", "pass4"]
+PASS_NAMES = ["pass1", "pass2", "pass3", "pass4", "pass5"]
 
 
 def _utcnow():

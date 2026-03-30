@@ -4,6 +4,7 @@ import type {
   JobSummary,
   Pass1CorrectionPayload,
   Pass2Corrections,
+  Pass5Segments,
   ProjectDetail,
   ProjectSummary,
 } from '../types/api'
@@ -82,6 +83,18 @@ export const api = {
 
   resumePass4: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass4/resume`),
+
+  acceptPass4: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass4/accept`),
+
+  runPass5: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass5/run`),
+
+  acceptPass5: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/accept`),
+
+  getPass5Segments: (projectId: string) =>
+    get<Pass5Segments>(`/api/projects/${projectId}/passes/pass5/raw/segments.json`),
 
   detectionsMapUrl: (projectId: string) =>
     `/api/projects/${projectId}/passes/pass4/raw/detections_map.png`,

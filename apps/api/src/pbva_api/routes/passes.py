@@ -32,14 +32,16 @@ _RUN_RESETS_STATUS: dict[str, ProjectStatus] = {
     "pass2": ProjectStatus.pass1_accepted,
     "pass3": ProjectStatus.pass2_accepted,
     "pass4": ProjectStatus.pass3_accepted,
+    "pass5": ProjectStatus.pass4_accepted,
 }
 
 # Passes that must be invalidated when a given pass is re-run.
 _DOWNSTREAM_PASSES: dict[str, list[str]] = {
-    "pass1": ["pass2", "pass3", "pass4"],
-    "pass2": ["pass3", "pass4"],
-    "pass3": ["pass4"],
-    "pass4": [],
+    "pass1": ["pass2", "pass3", "pass4", "pass5"],
+    "pass2": ["pass3", "pass4", "pass5"],
+    "pass3": ["pass4", "pass5"],
+    "pass4": ["pass5"],
+    "pass5": [],
 }
 
 
@@ -810,4 +812,120 @@ def resume_pass4(
     _get_pass_or_404(db, project_id, "pass4")
     pf = _pass4_pause_file(settings.data_root, project_id)
     pf.unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@router.post("/{project_id}/passes/pass4/accept")
+def accept_pass4(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass4")
+    if pass_row.state != PassState.waiting_for_user.value:
+        raise HTTPException(status_code=409, detail=f"Pass 4 is in state '{pass_row.state}', cannot accept")
+
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass4")
+    accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass4")
+    accepted_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil
+    for fname in ("detections.json", "detections_map.png"):
+        src = raw_dir / fname
+        if src.exists():
+            shutil.copy2(src, accepted_dir / fname)
+
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass4",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="json",
+        path=str(accepted_dir / "detections.json"),
+    ))
+    pass_row.state = PassState.accepted.value
+    pass_row.latest_accepted_artifact_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    project = db.get(Project, project_id)
+    project.status = ProjectStatus.pass4_accepted.value
+    project.updated_at = _utcnow()
+
+    db.add(Event(
+        project_id=project_id,
+        event_type="pass_accepted",
+        payload_json=json.dumps({"pass_name": "pass4"}),
+    ))
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Pass 5 — Segment Building: raw file access, accept
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{project_id}/passes/pass5/raw/{filename}")
+def get_pass5_raw_file(
+    project_id: str,
+    filename: str,
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass5")
+    path = (raw_dir / filename).resolve()
+    try:
+        path.relative_to(raw_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return JSONResponse(content=json.loads(path.read_text()))
+
+
+@router.post("/{project_id}/passes/pass5/accept")
+def accept_pass5(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass5")
+    if pass_row.state != PassState.waiting_for_user.value:
+        raise HTTPException(status_code=409, detail=f"Pass 5 is in state '{pass_row.state}', cannot accept")
+
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass5")
+    accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass5")
+    accepted_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil
+    src = raw_dir / "segments.json"
+    if src.exists():
+        shutil.copy2(src, accepted_dir / "segments.json")
+
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass5",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="json",
+        path=str(accepted_dir / "segments.json"),
+    ))
+    pass_row.state = PassState.accepted.value
+    pass_row.latest_accepted_artifact_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    project = db.get(Project, project_id)
+    project.status = ProjectStatus.pass5_accepted.value
+    project.updated_at = _utcnow()
+
+    db.add(Event(
+        project_id=project_id,
+        event_type="pass_accepted",
+        payload_json=json.dumps({"pass_name": "pass5"}),
+    ))
+    db.commit()
     return {"ok": True}

@@ -95,3 +95,18 @@ export interface Pass2RawResult {
   bg_width: number
   bg_height: number
 }
+
+export interface Pass5Segment {
+  id: number
+  first_frame: number
+  last_frame: number
+  length: number
+  detections: { frame: number; cx: number; cy: number; radius: number }[]
+}
+
+export interface Pass5Segments {
+  segment_count: number
+  max_gap_frames: number
+  max_pixels_per_frame: number
+  segments: Pass5Segment[]
+}
