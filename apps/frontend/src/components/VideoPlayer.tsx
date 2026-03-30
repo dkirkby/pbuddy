@@ -223,9 +223,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       lastFrameIndexRef.current = frameIndex
     }
     const dets = detections ? (detections[frameIndex] ?? []) : []
-    setCurrentTime(mediaTime ?? video.currentTime)
-    setDetCount(dets.length)
-    onFrameChange?.(frameIndex)
+    if (!skipFrameUpdate) {
+      setCurrentTime(mediaTime ?? video.currentTime)
+      setDetCount(dets.length)
+      onFrameChange?.(frameIndex)
+    }
 
     const sx = canvas.width / bgWidth
     const sy = canvas.height / bgHeight
