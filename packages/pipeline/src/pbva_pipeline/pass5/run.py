@@ -112,6 +112,7 @@ class Pass5:
 
         progress.update(0.90, "write", "Writing segments.json…")
         raw_dir = ctx.paths.pass_raw_dir
+        raw_dir.mkdir(parents=True, exist_ok=True)
         output = {
             "segment_count": len(segments),
             "max_gap_frames": max_gap_frames,
