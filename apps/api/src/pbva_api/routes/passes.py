@@ -77,7 +77,21 @@ def run_pass(
     settings=Depends(get_settings),
 ):
     project = _get_project_or_404(db, project_id)
-    pass_row = _get_pass_or_404(db, project_id, pass_name)
+    pass_row = db.execute(
+        select(Pass)
+        .where(Pass.project_id == project_id)
+        .where(Pass.pass_name == pass_name)
+    ).scalar_one_or_none()
+    if pass_row is None:
+        # Project pre-dates this pass being added — create the row on demand.
+        pass_row = Pass(
+            project_id=project_id,
+            pass_name=pass_name,
+            state=PassState.not_started.value,
+            updated_at=_utcnow(),
+        )
+        db.add(pass_row)
+        db.flush()
 
     # Any pass state is valid to re-run; downstream cascade handles consistency.
     # (produced_raw_output is unused but included defensively.)
