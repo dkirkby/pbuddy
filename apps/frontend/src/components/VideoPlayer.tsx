@@ -98,6 +98,7 @@ interface Props {
   bgPlateUrl?: string
   staticOverlay?: HTMLCanvasElement | null
   segmentEndpoints?: Record<number, { cx: number; cy: number; id: number; isStart: boolean }[]>
+  segmentPaths?: Array<{ id: number; detections: { frame: number; cx: number; cy: number }[] }>
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ interface Props {
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, ballDetections, courtGeometry, totalFrames,
   annotations, onVideoClick, onFrameChange, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
-  staticOverlay, segmentEndpoints,
+  staticOverlay, segmentEndpoints, segmentPaths,
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -266,6 +267,24 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       }
     }
 
+    // Draw polyline through each segment's visible detections (within ±8 frames).
+    if (segmentPaths) {
+      const loFi = frameIndex - 8 - 1
+      const hiFi = frameIndex + 8 - 1
+      ctx.lineWidth = 2
+      for (const seg of segmentPaths) {
+        const visible = seg.detections.filter(d => d.frame >= loFi && d.frame <= hiFi)
+        if (visible.length < 2) continue
+        ctx.strokeStyle = 'rgba(100, 210, 255, 0.85)'
+        ctx.beginPath()
+        ctx.moveTo(visible[0].cx * sx, visible[0].cy * sy)
+        for (let i = 1; i < visible.length; i++) {
+          ctx.lineTo(visible[i].cx * sx, visible[i].cy * sy)
+        }
+        ctx.stroke()
+      }
+    }
+
     // Draw segment start/end markers for segments whose first or last frame is within ±8.
     if (segmentEndpoints) {
       ctx.font = `bold ${Math.max(10, Math.round(11 * sx))}px sans-serif`
@@ -369,7 +388,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     if (staticOverlay) {
       ctx.drawImage(staticOverlay, 0, 0, canvas.width, canvas.height)
     }
-  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange, staticOverlay, segmentEndpoints])
+  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange, staticOverlay, segmentEndpoints, segmentPaths])
 
   // Redraw whenever annotations or other overlay state changes (e.g. right after a click).
   useEffect(() => { drawOverlay() }, [drawOverlay])

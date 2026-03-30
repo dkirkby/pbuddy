@@ -59,6 +59,11 @@ export default function Pass5Page() {
     return out
   }, [detectionsData])
 
+  // Segment paths for polyline rendering.
+  const segmentPaths = useMemo(() =>
+    segments.map(seg => ({ id: seg.id, detections: seg.detections })),
+  [segments])
+
   // Segment endpoint index: frame number → list of {cx, cy, id, isStart}.
   // Uses the first/last detection in each segment for position.
   const segmentEndpoints = useMemo(() => {
@@ -121,6 +126,7 @@ export default function Pass5Page() {
         bgHeight={bgHeight}
         totalFrames={0}
         ballDetections={ballDetections}
+        segmentPaths={segmentPaths}
         segmentEndpoints={segmentEndpoints}
         storageKey={`pass5-pos-${projectId}`}
       />
