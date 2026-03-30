@@ -97,6 +97,7 @@ interface Props {
   previewCanvasRef?: React.RefObject<HTMLCanvasElement>
   bgPlateUrl?: string
   staticOverlay?: HTMLCanvasElement | null
+  segmentEndpoints?: Record<number, { cx: number; cy: number; id: number; isStart: boolean }[]>
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ interface Props {
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, ballDetections, courtGeometry, totalFrames,
   annotations, onVideoClick, onFrameChange, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
-  staticOverlay,
+  staticOverlay, segmentEndpoints,
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -245,20 +246,54 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       ctx.stroke()
     }
 
-    // Draw pass4 ball detections: cyan for previous 8 frames, magenta for current frame.
+    // Draw pass4 ball detections: magenta for current frame, cyan for ±8 frames.
     // Subtract 1 to compensate for video PTS starting at 1/fps rather than 0, which causes
     // Math.round(mediaTime * fps) to be 1 higher than OpenCV's 0-based frame counter.
     if (ballDetections) {
-      for (let offset = 8; offset >= 0; offset--) {
+      for (let offset = -8; offset <= 8; offset++) {
         const fi = frameIndex - offset - 1
         const dets4 = ballDetections[fi]
         if (!dets4) continue
-        ctx.strokeStyle = offset === 0 ? 'rgba(255, 0, 255, 0.9)' : 'rgba(0, 220, 255, 0.5)'
-        ctx.lineWidth = offset === 0 ? 2 : 1.5
+        const isCurrent = offset === 0
+        const fade = 1 - Math.abs(offset) / 9
+        ctx.strokeStyle = isCurrent ? 'rgba(255, 0, 255, 0.9)' : `rgba(0, 220, 255, ${(fade * 0.6).toFixed(2)})`
+        ctx.lineWidth = isCurrent ? 2 : 1.5
         for (const det of dets4) {
           ctx.beginPath()
           ctx.arc(det.cx * sx, det.cy * sy, 14, 0, 2 * Math.PI)
           ctx.stroke()
+        }
+      }
+    }
+
+    // Draw segment start/end markers for segments whose first or last frame is within ±8.
+    if (segmentEndpoints) {
+      ctx.font = `bold ${Math.max(10, Math.round(11 * sx))}px sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      for (let offset = -8; offset <= 8; offset++) {
+        const fi = frameIndex - offset - 1
+        const endpoints = segmentEndpoints[fi]
+        if (!endpoints) continue
+        const fade = 1 - Math.abs(offset) / 9
+        for (const ep of endpoints) {
+          const x = ep.cx * sx
+          const y = ep.cy * sy
+          const color = ep.isStart ? `rgba(0, 220, 80, ${fade.toFixed(2)})` : `rgba(255, 160, 0, ${fade.toFixed(2)})`
+          // Diamond marker
+          const r = 10
+          ctx.strokeStyle = color
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(x, y - r)
+          ctx.lineTo(x + r, y)
+          ctx.lineTo(x, y + r)
+          ctx.lineTo(x - r, y)
+          ctx.closePath()
+          ctx.stroke()
+          // Segment id label offset above the diamond
+          ctx.fillStyle = color
+          ctx.fillText(String(ep.id + 1), x, y - r - 8)
         }
       }
     }
@@ -334,7 +369,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     if (staticOverlay) {
       ctx.drawImage(staticOverlay, 0, 0, canvas.width, canvas.height)
     }
-  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange, staticOverlay])
+  }, [fps, bgWidth, bgHeight, detections, ballDetections, showCourt, showTent, courtGeometry, annotations, onFrameChange, staticOverlay, segmentEndpoints])
 
   // Redraw whenever annotations or other overlay state changes (e.g. right after a click).
   useEffect(() => { drawOverlay() }, [drawOverlay])
