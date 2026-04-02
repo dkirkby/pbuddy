@@ -30,26 +30,24 @@ cd apps/frontend && npm install && cd ../..
 
 PBuddy runs as two processes. Open two terminals from the repo root:
 
-**macOS / Linux**
+**Terminal 1 — API server** (also spawns the background worker):
 
-Terminal 1 — API server (also spawns the background worker):
+macOS / Linux:
 ```bash
 ./scripts/dev_api.sh
 ```
-
-Terminal 2 — Frontend dev server:
-```bash
-./scripts/dev_frontend.sh
-```
-
-**Windows**
-
-Terminal 1 — API server (also spawns the background worker):
+Windows:
 ```powershell
 uv run uvicorn pbva_api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Terminal 2 — Frontend dev server:
+**Terminal 2 — Frontend dev server:**
+
+macOS / Linux:
+```bash
+./scripts/dev_frontend.sh
+```
+Windows:
 ```powershell
 cd apps\frontend && npm run dev
 ```
