@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Milestone 1 (Pass 1 end-to-end: upload → run → review → accept) is implemented. Key reference documents:
+Passes 1–5 are implemented end-to-end (run → review → accept). Key reference documents:
 
 - `VISION.md` — requirements and accuracy targets
 - `PIPELINE.md` — the 4-pass processing pipeline with user correction workflows
@@ -67,7 +67,7 @@ FastAPI Backend  ←→  SQLite (metadata)
   ↕
 Worker Process  ←→  Filesystem (artifacts)
   ↕
-Pass 1 → Pass 2 → Pass 3 → Pass 4
+Pass 1 → Pass 2 → Pass 3 → Pass 4 → Pass 5
 ```
 
 Each pass follows the **accepted-state pattern**:
@@ -76,14 +76,15 @@ Each pass follows the **accepted-state pattern**:
 3. User accepts; system merges raw + corrections into **accepted** artifacts
 4. Next pass depends **only** on accepted artifacts — never on raw outputs
 
-### The 4 Passes
+### The 5 Passes
 
 | Pass | Goal | Key outputs |
 |------|------|-------------|
-| 1 | Global scene & camera calibration | Median background plate, court geometry, ball color profile |
-| 2 | Temporal segmentation | "Live point" clips with dead time removed, initial match state |
-| 3 | Player & ball event tracking | 2D ball positions, player tracks, hit/bounce/net events |
-| 4 | 3D physics reconstruction | 3D trajectories, shot metrics, player analytics |
+| 1 | Scene calibration | Median background plate(s), court geometry, stable time bounds |
+| 2 | Ball annotation | Per-frame ball position + radius annotations, patch images |
+| 3 | Ball color tagging | RGB+HSV pixel samples, hue-saturation & value-saturation scatter plots |
+| 4 | Ball detection | Per-frame motion+color+silhouette candidate detections across stable range |
+| 5 | Segment building | Trajectory segments grouped from Pass 4 detections |
 
 ### Project Artifact Layout
 
@@ -130,10 +131,13 @@ POST   /api/projects/{id}/passes/{pass}/accept
 - `ProjectHome` — project detail, pass state controls, workflow entry point
 - `Pass1Page` — court geometry editor (SVG overlay on background plate)
 - `Pass2Page` — ball annotation tool (frame scrubbing + point placement)
+- `Pass3Page` — ball color polygon editor (SVG overlays on hue-saturation and value-saturation scatter plots)
+- `Pass4Page` — detection reviewer (video player with per-frame ball detection overlay)
+- `Pass5Page` — segment reviewer (video player with detection + segment polyline overlays)
 
 ### Challenge Dataset
 
-`challenge/` contains a standalone ball detection benchmark: 874 labelled frame images with `data/truth.json` ground truth annotations. `challenge/src/detect.py` is the detector under development; `challenge/src/setup.py` builds the dataset. Run with `uv run python challenge/src/detect.py`. Passes 3 and 4 are currently stubs.
+`challenge/` contains a standalone ball detection benchmark: 874 labelled frame images with `data/truth.json` ground truth annotations. `challenge/src/detect.py` is the detector under development; `challenge/src/setup.py` builds the dataset. Run with `uv run python challenge/src/detect.py`.
 
 ## Frame Index Conventions
 
