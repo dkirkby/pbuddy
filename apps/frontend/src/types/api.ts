@@ -85,9 +85,27 @@ export interface BallAnnotation {
   radius: number
 }
 
+export interface PlayerNames {
+  serving_team_right: string
+  serving_team_left: string
+  receiving_team_right: string
+  receiving_team_left: string
+}
+
+export interface RallyRecord {
+  score: string
+  start_frame: number
+  stop_frame: number
+  serverName: string
+  receiverName: string
+  servingTeamWinsRally: boolean
+}
+
 export interface Pass2Corrections {
   annotations: Record<string, BallAnnotation>
   patches: Record<string, string>  // frameIndex → PNG data URL
+  player_names?: PlayerNames
+  rally?: RallyRecord[]
 }
 
 export interface Pass2RawResult {

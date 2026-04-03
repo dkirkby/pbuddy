@@ -412,10 +412,15 @@ def get_pass2_corrections(
             b64 = base64.b64encode(png_path.read_bytes()).decode()
             patches[frame_str] = f"data:image/png;base64,{b64}"
 
-    return {"ok": True, "data": {
-        **data,
-        "patches": patches,
-    }}
+    rally_path = corrections_dir / "rally.json"
+    rally_json = json.loads(rally_path.read_text()) if rally_path.exists() else {}
+
+    result: dict = {**data, "patches": patches}
+    if "player_names" in rally_json:
+        result["player_names"] = rally_json["player_names"]
+    if "rally" in rally_json:
+        result["rally"] = rally_json["rally"]
+    return {"ok": True, "data": result}
 
 
 @router.put("/{project_id}/passes/pass2/corrections")
@@ -455,6 +460,16 @@ def save_pass2_corrections(
     for frame_str, data_url in body.get("patches", {}).items():
         _header, b64_data = data_url.split(",", 1)
         (patches_dir / f"{int(frame_str):06d}.png").write_bytes(base64.b64decode(b64_data))
+
+    # Write rally.json with player names and rally records if either is provided.
+    if "player_names" in body or "rally" in body:
+        rally_path = corrections_dir / "rally.json"
+        rally_data: dict = {}
+        if "player_names" in body:
+            rally_data["player_names"] = body["player_names"]
+        if "rally" in body:
+            rally_data["rally"] = body["rally"]
+        rally_path.write_text(json.dumps(rally_data, indent=2))
 
     # Register correction artifact.
     art_id = str(uuid.uuid4())
@@ -534,6 +549,12 @@ def accept_pass2(
         progress=NullProgress(),
     )
     accepted = Pass2().build_accepted_output(ctx, raw_result, corrections)
+
+    # Copy rally.json to accepted dir if present.
+    rally_src = corrections_dir / "rally.json"
+    if rally_src.exists():
+        import shutil
+        shutil.copy2(rally_src, accepted_dir / "rally.json")
 
     # Register accepted artifacts.
     art_id = str(uuid.uuid4())

@@ -8,7 +8,7 @@
  * ◀| / |▶  step one frame per press; hold for continuous stepping
  * ⏮        rewind to the beginning
  */
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { CourtGeometry } from '../types/api'
 import { computeVolumeOverlay } from '../lib/courtCamera'
 import { BALL_PATCH_RADIUS, COURT_KV } from '../lib/dimensions'
@@ -98,6 +98,119 @@ interface Props {
   bgPlateUrl?: string
   staticOverlay?: HTMLCanvasElement | null
   segmentPaths?: Array<{ id: number; detections: { frame: number; cx: number; cy: number }[] }>
+  rallyTimeline?: { events: Array<{ startFrame: number; stopFrame?: number; score?: string }>; onMarkerClick: (frame: number) => void }
+}
+
+// ─── Rally timeline bar ──────────────────────────────────────────────────────
+
+const BAR_H = 20          // px — colored bar area
+const TICK_LABEL_H = 12   // px — time-label area below bar
+const TIMELINE_H = BAR_H + TICK_LABEL_H
+
+const WINDOW_MINUTES = 3  // total span shown in the timeline bar
+
+function RallyTimelineBar({
+  events, currentFrame, fps, onMarkerClick,
+}: {
+  events: Array<{ startFrame: number; stopFrame?: number; score?: string }>
+  currentFrame: number
+  fps: number
+  onMarkerClick: (frame: number) => void
+}) {
+  const halfWindow = (WINDOW_MINUTES / 2) * 60 * fps
+  const windowFrames = WINDOW_MINUTES * 60 * fps
+  const winStart = currentFrame - halfWindow
+  const winEnd   = currentFrame + halfWindow
+
+  // Convert a frame number to a percentage across the bar [0..100].
+  const toPct = (f: number) => (f - winStart) / windowFrames * 100
+
+  // Time-axis ticks every 15 s.
+  const tickFrames = Math.round(15 * fps)
+  const ticks: number[] = []
+  for (let f = Math.ceil(winStart / tickFrames) * tickFrames; f <= winEnd; f += tickFrames) {
+    ticks.push(f)
+  }
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: TIMELINE_H, marginBottom: 4, overflow: 'hidden' }}>
+      {/* Gray background bar */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: BAR_H, background: '#bbb' }} />
+
+      {events.map((ev, i) => {
+        const servePct = toPct(ev.startFrame)
+        const endPct   = ev.stopFrame != null ? toPct(ev.stopFrame) : null
+
+        // Green fill clipped to [0, 100].
+        const fillLeft  = endPct != null ? Math.max(0, Math.min(100, servePct)) : null
+        const fillRight = endPct != null ? Math.max(0, Math.min(100, endPct))   : null
+        const showFill       = fillLeft != null && fillRight != null && fillRight > fillLeft && fillRight > 0 && fillLeft < 100
+        const showServeMarker = servePct >= 0 && servePct <= 100
+        const showEndMarker   = endPct != null && endPct >= 0 && endPct <= 100
+
+        if (!showFill && !showServeMarker && !showEndMarker) return null
+        return (
+          <Fragment key={i}>
+            {/* Green rally fill with score overlay */}
+            {showFill && (
+              <div style={{
+                position: 'absolute', top: 0, height: BAR_H,
+                left: `${fillLeft}%`, width: `${fillRight! - fillLeft!}%`,
+                background: '#1c7a1c', pointerEvents: 'none',
+                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {ev.score && (
+                  <span style={{ fontSize: 7, color: '#fff', fontFamily: 'monospace', whiteSpace: 'nowrap', userSelect: 'none' }}>
+                    {ev.score}
+                  </span>
+                )}
+              </div>
+            )}
+            {/* Serve marker >| — triangle tip at startFrame, extends 6 px left */}
+            {showServeMarker && (
+              <div
+                style={{ position: 'absolute', top: 0, left: `calc(${servePct}% - 6px)`, height: BAR_H, zIndex: 2, cursor: 'pointer', display: 'flex' }}
+                onClick={(e) => { e.stopPropagation(); onMarkerClick(ev.startFrame) }}
+                title={`Seek to serve at frame ${ev.startFrame}`}
+              >
+                <div style={{ width: 0, height: 0, borderTop: `${BAR_H / 2}px solid transparent`, borderBottom: `${BAR_H / 2}px solid transparent`, borderLeft: `6px solid #0a3a0a` }} />
+                <div style={{ width: 2, height: BAR_H, background: '#0a3a0a' }} />
+              </div>
+            )}
+            {/* End marker |< — bar at stopFrame, triangle tip extends 6 px right */}
+            {showEndMarker && ev.stopFrame != null && (
+              <div
+                style={{ position: 'absolute', top: 0, left: `${endPct}%`, height: BAR_H, zIndex: 2, cursor: 'pointer', display: 'flex' }}
+                onClick={(e) => { e.stopPropagation(); onMarkerClick(ev.stopFrame!) }}
+                title={`Seek to rally end at frame ${ev.stopFrame}`}
+              >
+                <div style={{ width: 2, height: BAR_H, background: '#3a0a0a' }} />
+                <div style={{ width: 0, height: 0, borderTop: `${BAR_H / 2}px solid transparent`, borderBottom: `${BAR_H / 2}px solid transparent`, borderRight: `6px solid #3a0a0a` }} />
+              </div>
+            )}
+          </Fragment>
+        )
+      })}
+
+      {/* Time-axis tick marks and labels every 15 s */}
+      {ticks.map(f => {
+        const pct = toPct(f)
+        if (pct < 0 || pct > 100 || f < 0) return null
+        const totalSec = Math.round(f / fps)  // seconds from video start
+        const m = Math.floor(totalSec / 60)
+        const s = totalSec % 60
+        const label = `${m}:${s.toString().padStart(2, '0')}`
+        return (
+          <Fragment key={f}>
+            <div style={{ position: 'absolute', top: BAR_H - 4, left: `${pct}%`, width: 1, height: 4, background: '#555', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', top: BAR_H, left: `${pct}%`, transform: 'translateX(-50%)', fontSize: 9, color: '#333', whiteSpace: 'nowrap', lineHeight: `${TICK_LABEL_H}px`, userSelect: 'none' }}>
+              {label}
+            </div>
+          </Fragment>
+        )
+      })}
+    </div>
+  )
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -105,7 +218,7 @@ interface Props {
 export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer({
   videoUrl, fps, bgWidth, bgHeight, detections, ballDetections, courtGeometry, totalFrames,
   annotations, onVideoClick, onFrameChange, ballCount, storageKey, previewCanvasRef, bgPlateUrl,
-  staticOverlay, segmentPaths,
+  staticOverlay, segmentPaths, rallyTimeline,
 }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -735,6 +848,16 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
 
   return (
     <div>
+      {/* Rally timeline — scrolls with current frame, spans 4 minutes */}
+      {rallyTimeline && duration > 0 && (
+        <RallyTimelineBar
+          events={rallyTimeline.events}
+          currentFrame={Math.round(currentTime * fps)}
+          fps={fps}
+          onMarkerClick={rallyTimeline.onMarkerClick}
+        />
+      )}
+
       {/* Video + canvas overlay */}
       <div
         style={{

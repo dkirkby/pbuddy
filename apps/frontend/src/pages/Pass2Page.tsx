@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PickleballDoublesGame } from '../lib/PickleballDoublesGame'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
 import type { VideoPlayerHandle } from '../components/VideoPlayer'
-import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass1RawResult, Pass2RawResult } from '../types/api'
+import type { ArtifactRef, BallAnnotation, CourtGeometry, Pass1RawResult, Pass2RawResult, PlayerNames, RallyRecord } from '../types/api'
 import { BALL_PATCH_RADIUS } from '../lib/dimensions'
 
 const PATCH_RADIUS = BALL_PATCH_RADIUS
@@ -28,6 +29,98 @@ interface Pass1AcceptedOutput {
   bg_height: number
 }
 
+type PendingRally = { score: string; start_frame: number; serverName: string; receiverName: string }
+type PhaseTargetType = 'new-serve' | 'existing-serve' | 'pending-serve' | 'pending-end' | 'existing-end'
+interface PhaseInfo { isServePhase: boolean; targetType: PhaseTargetType; targetIndex: number }
+
+function computePhaseInfo(
+  currentFrame: number,
+  rallies: RallyRecord[],
+  pendingRally: PendingRally | null,
+  fps: number,
+): PhaseInfo {
+  type Ev = { frame: number; type: 'serve' | 'end'; kind: 'existing' | 'pending'; index: number }
+  const events: Ev[] = []
+  for (let i = 0; i < rallies.length; i++) {
+    events.push({ frame: rallies[i].start_frame, type: 'serve', kind: 'existing', index: i })
+    events.push({ frame: rallies[i].stop_frame,  type: 'end',   kind: 'existing', index: i })
+  }
+  if (pendingRally !== null) {
+    events.push({ frame: pendingRally.start_frame, type: 'serve', kind: 'pending', index: -1 })
+  }
+  events.sort((a, b) => a.frame - b.frame)
+
+  if (events.length === 0) return { isServePhase: true, targetType: 'new-serve', targetIndex: -1 }
+
+  // If inside the pending rally (past its serve, no later events), wait for rally end.
+  if (pendingRally !== null && currentFrame >= pendingRally.start_frame) {
+    if (!events.some(e => e.frame > currentFrame)) {
+      return { isServePhase: false, targetType: 'pending-end', targetIndex: -1 }
+    }
+  }
+
+  // Nearest past event (≤ currentFrame) and nearest future event (> currentFrame).
+  let prev: Ev | null = null
+  let next: Ev | null = null
+  for (const e of events) {
+    if (e.frame <= currentFrame) prev = e
+    else if (next === null) next = e
+  }
+
+  let chosen: Ev
+  if (prev === null) {
+    chosen = next!
+  } else if (next === null) {
+    if (prev.type === 'end') {
+      // Within 1 second of the last rally-end: keep Rally Winner enabled so it can be corrected.
+      if (currentFrame - prev.frame <= fps) {
+        return { isServePhase: false, targetType: 'existing-end', targetIndex: prev.index }
+      }
+      return { isServePhase: true, targetType: 'new-serve', targetIndex: -1 }
+    }
+    return { isServePhase: false, targetType: 'pending-end', targetIndex: -1 }
+  } else {
+    // Tie-break toward the future (next).
+    chosen = (next.frame - currentFrame) <= (currentFrame - prev.frame) ? next : prev
+  }
+
+  if (chosen.type === 'serve') {
+    return {
+      isServePhase: true,
+      targetType: chosen.kind === 'pending' ? 'pending-serve' : 'existing-serve',
+      targetIndex: chosen.index,
+    }
+  }
+  return { isServePhase: false, targetType: 'existing-end', targetIndex: chosen.index }
+}
+
+function getServingTeamIndex(serverName: string, names: PlayerNames): 0 | 1 {
+  return (serverName === names.serving_team_right || serverName === names.serving_team_left) ? 0 : 1
+}
+
+function replayGame(
+  rallies: RallyRecord[],
+  names: PlayerNames,
+): { updatedRallies: RallyRecord[]; finalGame: PickleballDoublesGame } {
+  const sorted = [...rallies].sort((a, b) => a.start_frame - b.start_frame)
+  const game = new PickleballDoublesGame(
+    names.serving_team_right, names.serving_team_left,
+    names.receiving_team_right, names.receiving_team_left,
+  )
+  const updatedRallies = sorted.map(r => {
+    const pos = game.positions
+    const updated: RallyRecord = {
+      ...r,
+      score: game.toString(),
+      serverName: pos[game.serverPosition],
+      receiverName: pos[game.receiverPosition],
+    }
+    game.update(r.servingTeamWinsRally)
+    return updated
+  })
+  return { updatedRallies, finalGame: game }
+}
+
 export default function Pass2Page() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -38,10 +131,19 @@ export default function Pass2Page() {
   const [annotations, setAnnotations] = useState<Record<string, BallAnnotation>>({})
   const [patches, setPatches] = useState<Record<string, string>>({})
   const [patchOrder, setPatchOrder] = useState<string[]>([])
+  const [playerNames, setPlayerNames] = useState<PlayerNames>({
+    serving_team_right: 'Serving Team Right',
+    serving_team_left: 'Serving Team Left',
+    receiving_team_right: 'Receiving Team Right',
+    receiving_team_left: 'Receiving Team Left',
+  })
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+
+  const [pendingRally, setPendingRally] = useState<PendingRally | null>(null)
+  const [rallies, setRallies] = useState<RallyRecord[]>([])
 
   // Load pass2 raw result (fps, bg dimensions).
   const { data: artResp } = useQuery({
@@ -133,6 +235,12 @@ export default function Pass2Page() {
         Object.keys(correctionsResp.data.patches).sort((a, b) => parseInt(b) - parseInt(a))
       )
     }
+    if (correctionsResp.data.player_names) {
+      setPlayerNames(correctionsResp.data.player_names)
+    }
+    if (correctionsResp.data.rally) {
+      setRallies(correctionsResp.data.rally)
+    }
     setDirty(false)
   }, [correctionsResp])
 
@@ -144,6 +252,77 @@ export default function Pass2Page() {
     }
     return out
   }, [annotations])
+
+  // Discard any pending (unstamped) serve when player names change.
+  useEffect(() => {
+    setPendingRally(null)
+  }, [playerNames.serving_team_right, playerNames.serving_team_left, playerNames.receiving_team_right, playerNames.receiving_team_left])
+
+  // Derived game state at the current frame position.
+  const gameDisplay = useMemo(() => {
+    const game = new PickleballDoublesGame(
+      playerNames.serving_team_right, playerNames.serving_team_left,
+      playerNames.receiving_team_right, playerNames.receiving_team_left,
+    )
+    const snap = () => {
+      const pos = game.positions
+      return { score: game.toString(), server: pos[game.serverPosition], receiver: pos[game.receiverPosition] }
+    }
+    let display = snap()
+    for (const r of [...rallies].sort((a, b) => a.start_frame - b.start_frame)) {
+      if (r.start_frame > currentFrameIndex) break
+      display = { score: r.score, server: r.serverName, receiver: r.receiverName }
+      if (r.stop_frame > currentFrameIndex) break
+      game.update(r.servingTeamWinsRally)
+      display = snap()
+    }
+    if (pendingRally && pendingRally.start_frame <= currentFrameIndex) {
+      display = { score: pendingRally.score, server: pendingRally.serverName, receiver: pendingRally.receiverName }
+    }
+    return display
+  }, [currentFrameIndex, rallies, pendingRally, playerNames.serving_team_right, playerNames.serving_team_left, playerNames.receiving_team_right, playerNames.receiving_team_left])
+
+  const phaseInfo = useMemo(
+    () => computePhaseInfo(currentFrameIndex, rallies, pendingRally, resultData?.fps ?? 30),
+    [currentFrameIndex, rallies, pendingRally, resultData?.fps],
+  )
+  const servePhase = phaseInfo.isServePhase
+
+  function handleServe() {
+    const { targetType, targetIndex } = phaseInfo
+    if (targetType === 'new-serve') {
+      setPendingRally({
+        score: gameDisplay.score,
+        start_frame: currentFrameIndex,
+        serverName: gameDisplay.server,
+        receiverName: gameDisplay.receiver,
+      })
+    } else if (targetType === 'existing-serve') {
+      const updated = [...rallies]
+      updated[targetIndex] = { ...updated[targetIndex], start_frame: currentFrameIndex }
+      setRallies(replayGame(updated, playerNames).updatedRallies)
+    } else if (targetType === 'pending-serve') {
+      setPendingRally(prev => prev ? { ...prev, start_frame: currentFrameIndex } : null)
+    }
+    setDirty(true)
+  }
+
+  function handleRallyWinner(winningTeamIndex: 0 | 1) {
+    const { targetType, targetIndex } = phaseInfo
+    if (targetType === 'pending-end') {
+      if (!pendingRally) return
+      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(pendingRally.serverName, playerNames)
+      const record: RallyRecord = { ...pendingRally, stop_frame: currentFrameIndex, servingTeamWinsRally }
+      setRallies(replayGame([...rallies, record], playerNames).updatedRallies)
+      setPendingRally(null)
+    } else if (targetType === 'existing-end') {
+      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(rallies[targetIndex].serverName, playerNames)
+      const updated = [...rallies]
+      updated[targetIndex] = { ...updated[targetIndex], stop_frame: currentFrameIndex, servingTeamWinsRally }
+      setRallies(replayGame(updated, playerNames).updatedRallies)
+    }
+    setDirty(true)
+  }
 
   const handleVideoClick = useCallback(
     (frameIndex: number, bgX: number, bgY: number, patchDataUrl: string | null, radius: number) => {
@@ -172,7 +351,7 @@ export default function Pass2Page() {
     setSaving(true)
     setStatusMsg(null)
     try {
-      await api.savePass2Annotations(projectId!, annotations, patches)
+      await api.savePass2Annotations(projectId!, annotations, patches, playerNames, rallies)
       setDirty(false)
       qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
       setStatusMsg('Saved.')
@@ -210,7 +389,7 @@ export default function Pass2Page() {
       </button>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-        <h1 style={{ margin: 0 }}>Pass 2 — Ball Annotation</h1>
+        <h1 style={{ margin: 0 }}>Pass 2 — Rally and Ball Annotation</h1>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
@@ -245,6 +424,53 @@ export default function Pass2Page() {
         {dirty && <span style={{ color: '#f90', marginLeft: 8 }}>⚠ Unsaved changes</span>}
       </p>
 
+      <div style={{ marginBottom: 8 }}>
+        {([
+          { keys: ['serving_team_right', 'serving_team_left'] as (keyof PlayerNames)[], labels: ['Serving Team Right', 'Serving Team Left'], teamIndex: 0 as 0 | 1 },
+          { keys: ['receiving_team_left', 'receiving_team_right'] as (keyof PlayerNames)[], labels: ['Receiving Team Left', 'Receiving Team Right'], teamIndex: 1 as 0 | 1 },
+        ]).map(({ keys, labels, teamIndex }) => (
+          <div key={keys[0]} style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 8 }}>
+            {keys.map((key, i) => (
+              <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, flex: '1 1 0' }}>
+                <span style={{ color: '#444' }}>{labels[i]}</span>
+                <input
+                  type="text"
+                  value={playerNames[key]}
+                  onChange={(e) => {
+                    setPlayerNames((prev) => ({ ...prev, [key]: e.target.value }))
+                    setDirty(true)
+                  }}
+                  style={{ padding: '4px 8px', fontSize: 14, borderRadius: 3, border: '1px solid #555', background: '#1a1a1a', color: '#eee', width: '100%', boxSizing: 'border-box' }}
+                />
+              </label>
+            ))}
+            <button
+              onClick={() => handleRallyWinner(teamIndex)}
+              disabled={servePhase}
+              style={{ padding: '5px 12px', fontSize: 13, cursor: servePhase ? 'default' : 'pointer', whiteSpace: 'nowrap', alignSelf: 'flex-end' }}
+            >
+              Rally Winner
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <button
+          onClick={handleServe}
+          disabled={!servePhase}
+          style={{ padding: '5px 14px', fontSize: 13, cursor: servePhase ? 'pointer' : 'default' }}
+        >
+          Serve
+        </button>
+        {gameDisplay && (
+          <span style={{ fontSize: 14, color: '#333' }}>
+            <span style={{ fontFamily: 'monospace', color: '#000' }}>{gameDisplay.score}</span>
+            {' '}{gameDisplay.server} serving to {gameDisplay.receiver}
+          </span>
+        )}
+      </div>
+
       {!resultData ? (
         <div style={{
           width: '100%', height: 360, background: '#111',
@@ -269,6 +495,13 @@ export default function Pass2Page() {
           storageKey={`pass2-pos-${projectId}`}
           previewCanvasRef={previewRef}
           bgPlateUrl={bgPlateUrl}
+          rallyTimeline={{
+            events: [
+              ...rallies.map(r => ({ startFrame: r.start_frame, stopFrame: r.stop_frame, score: r.score })),
+              ...(pendingRally ? [{ startFrame: pendingRally.start_frame, score: pendingRally.score }] : []),
+            ],
+            onMarkerClick: (frame) => playerRef.current?.seekToFrame(frame),
+          }}
         />
       )}
 
