@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
@@ -11,7 +11,9 @@ export default function Pass5Page() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const playerRef = useRef<VideoPlayerHandle>(null)
+  const tableRef = useRef<HTMLDivElement>(null)
   const [accepting, setAccepting] = useState(false)
+  const [currentFrame, setCurrentFrame] = useState(0)
 
   const { data: segData, isLoading } = useQuery({
     queryKey: ['pass5-segments', projectId],
@@ -64,24 +66,31 @@ export default function Pass5Page() {
     segments.map(seg => ({ id: seg.id, detections: seg.detections })),
   [segments])
 
-  // Segment endpoint index: frame number → list of {cx, cy, id, isStart}.
-  // Uses the first/last detection in each segment for position.
-  const segmentEndpoints = useMemo(() => {
-    const out: Record<number, { cx: number; cy: number; id: number; isStart: boolean }[]> = {}
+  // Segments visible at the current frame: those that contain it or have an endpoint within 8 frames.
+  const visibleSegmentIds = useMemo(() => {
+    const currentFi = currentFrame - 1  // convert browser→OpenCV numbering
+    const ids = new Set<number>()
     for (const seg of segments) {
-      const first = seg.detections[0]
-      const last = seg.detections[seg.detections.length - 1]
-      if (first) {
-        if (!out[first.frame]) out[first.frame] = []
-        out[first.frame].push({ cx: first.cx, cy: first.cy, id: seg.id, isStart: true })
-      }
-      if (last && last.frame !== first?.frame) {
-        if (!out[last.frame]) out[last.frame] = []
-        out[last.frame].push({ cx: last.cx, cy: last.cy, id: seg.id, isStart: false })
-      }
+      const inSeg = currentFi >= seg.first_frame && currentFi <= seg.last_frame
+      const nearStart = Math.abs(seg.first_frame - currentFi) <= 8
+      const nearEnd = Math.abs(seg.last_frame - currentFi) <= 8
+      if (inSeg || nearStart || nearEnd) ids.add(seg.id)
     }
-    return out
-  }, [segments])
+    return ids
+  }, [segments, currentFrame])
+
+  // Auto-scroll the table so the first highlighted row has at most 3 rows above it visible.
+  useEffect(() => {
+    const container = tableRef.current
+    if (!container) return
+    const firstIdx = segments.findIndex(seg => visibleSegmentIds.has(seg.id))
+    if (firstIdx < 0) return
+    const rows = container.querySelectorAll('tbody tr')
+    const targetRow = rows[firstIdx] as HTMLElement | undefined
+    if (!targetRow) return
+    const rowHeight = targetRow.offsetHeight || 24
+    container.scrollTop = Math.max(0, (firstIdx - 3) * rowHeight)
+  }, [visibleSegmentIds, segments])
 
   const fps = pass2Meta?.fps ?? 30
   const bgWidth = pass2Meta?.bg_width ?? 960
@@ -100,7 +109,8 @@ export default function Pass5Page() {
             <span style={{ fontSize: 13, color: '#555' }}>
               {segData.segment_count} segment{segData.segment_count !== 1 ? 's' : ''}
               {' · '}gap ≤ {segData.max_gap_frames} frames
-              {' · '}dist ≤ {segData.max_pixels_per_frame} px/frame
+              {' · '}gate {segData.large_gate_px}px → {segData.small_gate_px}px
+              {' · '}min length {segData.min_segment_length}
             </span>
           )}
           <button
@@ -114,8 +124,8 @@ export default function Pass5Page() {
       </div>
 
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
-        Cyan/magenta circles: ball detections within ±8 frames.
-        Green diamonds: segment starts · Orange diamonds: segment ends (within ±8 frames, labelled by segment number).
+        Magenta circle: ball detection in current frame.
+        Cyan polyline: segments containing the current frame or with an endpoint within 8 frames (full segment shown).
       </p>
 
       <VideoPlayer
@@ -127,7 +137,7 @@ export default function Pass5Page() {
         totalFrames={0}
         ballDetections={ballDetections}
         segmentPaths={segmentPaths}
-        segmentEndpoints={segmentEndpoints}
+        onFrameChange={setCurrentFrame}
         storageKey={`pass5-pos-${projectId}`}
       />
 
@@ -136,33 +146,38 @@ export default function Pass5Page() {
       ) : segments.length === 0 ? (
         <div style={{ color: '#888', marginTop: 16 }}>No segments found.</div>
       ) : (
-        <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%', marginTop: 16 }}>
-          <thead>
-            <tr style={{ background: '#f0f0f0' }}>
-              <th style={th}>#</th>
-              <th style={th}>First frame</th>
-              <th style={th}>Last frame</th>
-              <th style={th}>Detections</th>
-              <th style={th}>Span (frames)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {segments.map((seg) => (
-              <tr
-                key={seg.id}
-                style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }}
-                onClick={() => playerRef.current?.seekToFrame(seg.first_frame + 1)}
-                title="Click to seek to segment start"
-              >
-                <td style={td}>{seg.id + 1}</td>
-                <td style={td}>{seg.first_frame}</td>
-                <td style={td}>{seg.last_frame}</td>
-                <td style={td}>{seg.length}</td>
-                <td style={td}>{seg.last_frame - seg.first_frame + 1}</td>
+        <div ref={tableRef} style={{ maxHeight: 280, overflowY: 'auto', marginTop: 16 }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 1 }}>
+              <tr>
+                <th style={th}>#</th>
+                <th style={th}>First frame</th>
+                <th style={th}>Last frame</th>
+                <th style={th}>Detections</th>
+                <th style={th}>Span (frames)</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {segments.map((seg) => {
+                const highlighted = visibleSegmentIds.has(seg.id)
+                return (
+                  <tr
+                    key={seg.id}
+                    style={{ borderBottom: '1px solid #eee', cursor: 'pointer', background: highlighted ? '#def' : undefined }}
+                    onClick={() => playerRef.current?.seekToFrame(seg.first_frame + 1)}
+                    title="Click to seek to segment start"
+                  >
+                    <td style={td}>{seg.id + 1}</td>
+                    <td style={td}>{seg.first_frame}</td>
+                    <td style={td}>{seg.last_frame}</td>
+                    <td style={td}>{seg.length}</td>
+                    <td style={td}>{seg.last_frame - seg.first_frame + 1}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

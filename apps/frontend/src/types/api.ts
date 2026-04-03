@@ -107,6 +107,8 @@ export interface Pass5Segment {
 export interface Pass5Segments {
   segment_count: number
   max_gap_frames: number
-  max_pixels_per_frame: number
+  large_gate_px: number
+  small_gate_px: number
+  min_segment_length: number
   segments: Pass5Segment[]
 }
