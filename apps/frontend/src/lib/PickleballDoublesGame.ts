@@ -16,6 +16,9 @@ export class PickleballDoublesGame {
   private _servingPlayer: number
   private _openingTurn: boolean
   private _rightIndex: [number, number]
+  // Which teams[team] index is "player 1" for the current service turn.
+  // Set to rightIndex[team] at each side-out — the player on the RH side starts serving.
+  private _player1Index: [number, number]
 
   constructor(
     teamARightFirstServer: string,
@@ -32,6 +35,7 @@ export class PickleballDoublesGame {
     this._servingPlayer = 2
     this._openingTurn = true
     this._rightIndex = [0, 0]
+    this._player1Index = [0, 0]
   }
 
   get score(): [number, number] {
@@ -60,13 +64,14 @@ export class PickleballDoublesGame {
 
   get serverPosition(): number {
     const team = this._servingTeam
-    const teamScore = this._score[team]
     const [rightPos, leftPos] = this._sideIndicesForTeam(team)
-    const firstServerPos = (teamScore % 2 === 0) ? rightPos : leftPos
+    // Player 1 is whoever was on the RH side when this service turn started.
+    // Track their current position via rightIndex vs the snapshot taken at side-out.
+    const player1Pos = this._rightIndex[team] === this._player1Index[team] ? rightPos : leftPos
     if (this._openingTurn || this._servingPlayer === 1) {
-      return firstServerPos
+      return player1Pos
     }
-    return firstServerPos === rightPos ? leftPos : rightPos
+    return player1Pos === rightPos ? leftPos : rightPos
   }
 
   get receiverPosition(): number {
@@ -87,6 +92,8 @@ export class PickleballDoublesGame {
       this._openingTurn = false
       this._servingTeam = 1
       this._servingPlayer = 1
+      // Snapshot: player 1 for team B is whoever is currently on the RH side.
+      this._player1Index[1] = this._rightIndex[1]
       return
     }
     if (this._servingPlayer === 1) {
@@ -94,6 +101,8 @@ export class PickleballDoublesGame {
     } else {
       this._servingTeam = 1 - this._servingTeam
       this._servingPlayer = 1
+      // Snapshot: player 1 for the new serving team is whoever is on the RH side now.
+      this._player1Index[this._servingTeam] = this._rightIndex[this._servingTeam]
     }
   }
 
