@@ -40,6 +40,12 @@ export default function Pass5Page() {
     },
   })
 
+  const { data: pass2Corrections } = useQuery({
+    queryKey: ['pass2-corrections', projectId],
+    queryFn: () => api.getPass2Corrections(projectId!),
+  })
+  const rallies = pass2Corrections?.data?.rally ?? []
+
   const acceptPass5 = useMutation({
     mutationFn: () => api.acceptPass5(projectId!),
     onSuccess: () => {
@@ -139,6 +145,10 @@ export default function Pass5Page() {
         segmentPaths={segmentPaths}
         onFrameChange={setCurrentFrame}
         storageKey={`pass5-pos-${projectId}`}
+        rallyTimeline={{
+          events: rallies.map(r => ({ startFrame: r.start_frame, stopFrame: r.stop_frame, score: r.score })),
+          onMarkerClick: (frame) => playerRef.current?.seekToFrame(frame),
+        }}
       />
 
       {isLoading ? (

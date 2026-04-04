@@ -75,6 +75,7 @@ export default function Pass4Page() {
     queryFn: () => api.getPass2Corrections(projectId!),
   })
   const annotationsByFrame = pass2Corrections?.data?.annotations ?? {}
+  const rallies = pass2Corrections?.data?.rally ?? []
 
   const handleFrameChange = useCallback((fi: number) => setCurrentFrame(fi), [])
 
@@ -187,6 +188,10 @@ export default function Pass4Page() {
           onFrameChange={handleFrameChange}
           storageKey={`pass4-pos-${projectId}`}
           staticOverlay={showDetectionsMap ? overlayCanvasRef.current : null}
+          rallyTimeline={{
+            events: rallies.map(r => ({ startFrame: r.start_frame, stopFrame: r.stop_frame, score: r.score })),
+            onMarkerClick: (frame) => playerRef.current?.seekToFrame(frame),
+          }}
         />
       )}
 
