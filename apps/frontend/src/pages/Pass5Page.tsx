@@ -14,6 +14,7 @@ export default function Pass5Page() {
   const tableRef = useRef<HTMLDivElement>(null)
   const [accepting, setAccepting] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
+  const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
 
   const { data: segData, isLoading } = useQuery({
     queryKey: ['pass5-segments', projectId],
@@ -47,14 +48,19 @@ export default function Pass5Page() {
   const rallies = pass2Corrections?.data?.rally ?? []
 
   const acceptPass5 = useMutation({
-    mutationFn: () => api.acceptPass5(projectId!),
+    mutationFn: async () => {
+      if (deletedIds.size > 0) {
+        await api.savePass5Corrections(projectId!, [...deletedIds])
+      }
+      return api.acceptPass5(projectId!)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       navigate(`/projects/${projectId}`)
     },
   })
 
-  const segments: Pass5Segment[] = segData?.segments ?? []
+  const segments: Pass5Segment[] = (segData?.segments ?? []).filter(s => !deletedIds.has(s.id))
 
   // Per-frame ball detection index (OpenCV frame numbers).
   const ballDetections = useMemo(() => {
@@ -113,7 +119,8 @@ export default function Pass5Page() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           {segData && (
             <span style={{ fontSize: 13, color: '#555' }}>
-              {segData.segment_count} segment{segData.segment_count !== 1 ? 's' : ''}
+              {segments.length} segment{segments.length !== 1 ? 's' : ''}
+              {deletedIds.size > 0 && <span style={{ color: '#c00' }}> ({deletedIds.size} deleted)</span>}
               {' · '}gap ≤ {segData.max_gap_frames} frames
               {' · '}gate {segData.large_gate_px}px → {segData.small_gate_px}px
               {' · '}min length {segData.min_segment_length}
@@ -165,6 +172,7 @@ export default function Pass5Page() {
                 <th style={th}>Last frame</th>
                 <th style={th}>Detections</th>
                 <th style={th}>Span (frames)</th>
+                <th style={{ ...th, textAlign: 'center' }} />
               </tr>
             </thead>
             <tbody>
@@ -182,6 +190,13 @@ export default function Pass5Page() {
                     <td style={td}>{seg.last_frame}</td>
                     <td style={td}>{seg.length}</td>
                     <td style={td}>{seg.last_frame - seg.first_frame + 1}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeletedIds(prev => new Set([...prev, seg.id])) }}
+                        title="Delete segment"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c00', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
+                      >✕</button>
+                    </td>
                   </tr>
                 )
               })}

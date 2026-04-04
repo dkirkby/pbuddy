@@ -921,6 +921,19 @@ def get_pass5_raw_file(
     return JSONResponse(content=json.loads(path.read_text()))
 
 
+@router.put("/{project_id}/passes/pass5/corrections")
+def save_pass5_corrections(
+    project_id: str,
+    body: dict = Body(...),
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass5")
+    corrections_dir.mkdir(parents=True, exist_ok=True)
+    (corrections_dir / "corrections.json").write_text(json.dumps(body, indent=2))
+    return {"ok": True}
+
+
 @router.post("/{project_id}/passes/pass5/accept")
 def accept_pass5(
     project_id: str,
@@ -933,13 +946,19 @@ def accept_pass5(
 
     from pbva_core import paths as p
     raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass5")
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass5")
     accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass5")
     accepted_dir.mkdir(parents=True, exist_ok=True)
 
-    import shutil
     src = raw_dir / "segments.json"
     if src.exists():
-        shutil.copy2(src, accepted_dir / "segments.json")
+        raw_data = json.loads(src.read_text())
+        corrections_path = corrections_dir / "corrections.json"
+        if corrections_path.exists():
+            deleted_ids = set(json.loads(corrections_path.read_text()).get("deleted_segment_ids", []))
+            raw_data["segments"] = [s for s in raw_data["segments"] if s["id"] not in deleted_ids]
+            raw_data["segment_count"] = len(raw_data["segments"])
+        (accepted_dir / "segments.json").write_text(json.dumps(raw_data, indent=2))
 
     art_id = str(uuid.uuid4())
     db.add(Artifact(
