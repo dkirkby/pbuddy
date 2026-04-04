@@ -97,7 +97,7 @@ interface Props {
   previewCanvasRef?: React.RefObject<HTMLCanvasElement>
   bgPlateUrl?: string
   staticOverlay?: HTMLCanvasElement | null
-  segmentPaths?: Array<{ id: number; detections: { frame: number; cx: number; cy: number }[] }>
+  segmentPaths?: Array<{ id: number; highlighted?: boolean; detections: { frame: number; cx: number; cy: number }[] }>
   rallyTimeline?: { events: Array<{ startFrame: number; stopFrame?: number; score?: string }>; onMarkerClick: (frame: number) => void }
 }
 
@@ -380,8 +380,6 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     // or have an endpoint within 8 frames of the current frame.
     if (segmentPaths) {
       const currentFi = frameIndex - 1  // convert browser→OpenCV numbering
-      ctx.lineWidth = 2
-      ctx.strokeStyle = 'rgba(100, 210, 255, 0.85)'
       for (const seg of segmentPaths) {
         if (seg.detections.length < 2) continue
         const firstFrame = seg.detections[0].frame
@@ -390,6 +388,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
         const nearStart = Math.abs(firstFrame - currentFi) <= 8
         const nearEnd = Math.abs(lastFrame - currentFi) <= 8
         if (!inSegment && !nearStart && !nearEnd) continue
+        ctx.lineWidth = seg.highlighted ? 4 : 2
+        ctx.strokeStyle = 'rgba(100, 210, 255, 0.85)'
         ctx.beginPath()
         ctx.moveTo(seg.detections[0].cx * sx, seg.detections[0].cy * sy)
         for (let i = 1; i < seg.detections.length; i++) {

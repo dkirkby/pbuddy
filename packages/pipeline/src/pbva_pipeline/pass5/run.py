@@ -106,11 +106,17 @@ def _build_segments(
         (s for s in completed if len(s) >= min_segment_length),
         key=lambda s: s[0]["frame"],
     )):
+        steps = [
+            math.hypot(dets[j+1]["cx"] - dets[j]["cx"], dets[j+1]["cy"] - dets[j]["cy"])
+            for j in range(len(dets) - 1)
+        ]
+        mean_speed = sum(steps) / len(steps) if steps else 0.0
         segments.append({
             "id": i,
             "first_frame": dets[0]["frame"],
             "last_frame": dets[-1]["frame"],
             "length": len(dets),
+            "mean_speed_px_per_frame": round(mean_speed, 2),
             "detections": dets,
         })
     return segments
@@ -129,7 +135,7 @@ class Pass5:
             from pbva_pipeline.base import NullProgress
             progress = NullProgress()
 
-        max_gap_frames: int = 3
+        max_gap_frames: int = 5
         large_gate_px: float = 150.0
         small_gate_px: float = 50.0
         min_segment_length: int = 5

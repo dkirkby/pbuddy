@@ -15,6 +15,8 @@ export default function Pass5Page() {
   const [accepting, setAccepting] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
+  const [selectedSegId, setSelectedSegId] = useState<number | null>(null)
+  const hasEnteredSelectedRef = useRef(false)
 
   const { data: segData, isLoading } = useQuery({
     queryKey: ['pass5-segments', projectId],
@@ -62,21 +64,59 @@ export default function Pass5Page() {
 
   const segments: Pass5Segment[] = (segData?.segments ?? []).filter(s => !deletedIds.has(s.id))
 
-  // Per-frame ball detection index (OpenCV frame numbers).
+  // Per-frame ball detection index (OpenCV frame numbers), restricted to detections used in a segment.
   const ballDetections = useMemo(() => {
     if (!detectionsData?.detections) return {}
+    const segmentKeys = new Set<string>()
+    for (const seg of segments) {
+      for (const d of seg.detections) segmentKeys.add(`${d.frame}:${d.cx}:${d.cy}`)
+    }
     const out: Record<number, { cx: number; cy: number; radius: number }[]> = {}
     for (const d of detectionsData.detections) {
+      if (!segmentKeys.has(`${d.frame}:${d.cx}:${d.cy}`)) continue
       if (!out[d.frame]) out[d.frame] = []
       out[d.frame].push({ cx: d.cx, cy: d.cy, radius: d.radius })
     }
     return out
-  }, [detectionsData])
+  }, [detectionsData, segments])
+
+  // Clear selection when playback moves outside the selected segment's range,
+  // but only after the frame has first entered the segment (avoids clearing on the
+  // initial seek when clicking a row while the video is outside that segment).
+  useEffect(() => {
+    hasEnteredSelectedRef.current = false
+  }, [selectedSegId])
+
+  useEffect(() => {
+    if (selectedSegId === null) return
+    const sel = segments.find(s => s.id === selectedSegId)
+    if (!sel) { setSelectedSegId(null); return }
+    const currentFi = currentFrame - 1
+    const inRange = currentFi >= sel.first_frame && currentFi <= sel.last_frame
+    if (inRange) {
+      hasEnteredSelectedRef.current = true
+    } else if (hasEnteredSelectedRef.current) {
+      setSelectedSegId(null)
+    }
+  }, [currentFrame, selectedSegId, segments])
 
   // Segment paths for polyline rendering.
   const segmentPaths = useMemo(() =>
-    segments.map(seg => ({ id: seg.id, detections: seg.detections })),
-  [segments])
+    segments.map(seg => ({ id: seg.id, highlighted: seg.id === selectedSegId, detections: seg.detections })),
+  [segments, selectedSegId])
+
+  // Per-segment count of other segments that share at least one frame.
+  const overlapCounts = useMemo(() => {
+    const counts: Record<number, number> = {}
+    for (const a of segments) {
+      let count = 0
+      for (const b of segments) {
+        if (b.id !== a.id && a.first_frame <= b.last_frame && b.first_frame <= a.last_frame) count++
+      }
+      counts[a.id] = count
+    }
+    return counts
+  }, [segments])
 
   // Segments visible at the current frame: those that contain it or have an endpoint within 8 frames.
   const visibleSegmentIds = useMemo(() => {
@@ -168,28 +208,34 @@ export default function Pass5Page() {
             <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 1 }}>
               <tr>
                 <th style={th}>#</th>
+                <th style={th}>Overlaps</th>
                 <th style={th}>First frame</th>
                 <th style={th}>Last frame</th>
                 <th style={th}>Detections</th>
                 <th style={th}>Span (frames)</th>
+                <th style={th}>Speed (px/fr)</th>
                 <th style={{ ...th, textAlign: 'center' }} />
               </tr>
             </thead>
             <tbody>
               {segments.map((seg) => {
-                const highlighted = visibleSegmentIds.has(seg.id)
+                const currentFi = currentFrame - 1
+                const highlighted = currentFi >= seg.first_frame && currentFi <= seg.last_frame
+                const selected = seg.id === selectedSegId
                 return (
                   <tr
                     key={seg.id}
-                    style={{ borderBottom: '1px solid #eee', cursor: 'pointer', background: highlighted ? '#def' : undefined }}
-                    onClick={() => playerRef.current?.seekToFrame(seg.first_frame + 1)}
+                    style={{ borderBottom: '1px solid #eee', cursor: 'pointer', background: highlighted ? '#def' : undefined, fontWeight: selected ? 700 : undefined }}
+                    onClick={() => { setSelectedSegId(seg.id); playerRef.current?.seekToFrame(seg.first_frame + 1) }}
                     title="Click to seek to segment start"
                   >
                     <td style={td}>{seg.id + 1}</td>
+                    <td style={{ ...td, color: overlapCounts[seg.id] > 0 ? '#c60' : '#444' }}>{overlapCounts[seg.id]}</td>
                     <td style={td}>{seg.first_frame}</td>
                     <td style={td}>{seg.last_frame}</td>
                     <td style={td}>{seg.length}</td>
                     <td style={td}>{seg.last_frame - seg.first_frame + 1}</td>
+                    <td style={td}>{seg.mean_speed_px_per_frame?.toFixed(1) ?? '—'}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <button
                         onClick={(e) => { e.stopPropagation(); setDeletedIds(prev => new Set([...prev, seg.id])) }}

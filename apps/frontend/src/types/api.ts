@@ -119,6 +119,7 @@ export interface Pass5Segment {
   first_frame: number
   last_frame: number
   length: number
+  mean_speed_px_per_frame: number
   detections: { frame: number; cx: number; cy: number; radius: number }[]
 }
 
