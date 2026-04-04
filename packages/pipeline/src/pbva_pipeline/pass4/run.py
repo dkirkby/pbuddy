@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import time
 from pathlib import Path
@@ -67,6 +68,9 @@ class Pass4:
         p2_result = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json"
         if not p2_result.exists():
             raise FileNotFoundError("Pass 2 accepted result.json not found")
+        rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
+        if not rally_path.exists():
+            raise FileNotFoundError("Pass 2 accepted rally.json not found — record rallies in Pass 2 first")
         poly_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "ball_color_polygons.json"
         if not poly_path.exists():
             raise FileNotFoundError("Pass 3 ball_color_polygons.json not found — accept Pass 3 first")
@@ -98,12 +102,21 @@ class Pass4:
         bg_plate = cv2.imread(str(ctx.paths.project_root / p1_raw.median_background_paths[0]))
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
 
-        progress.update(0.05, "setup", "Loading max ball radius and annotations from pass 2…")
+        progress.update(0.05, "setup", "Loading ball radius, annotations, and rally bounds from pass 2…")
         p2_result = json.loads(
             (ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json").read_text()
         )
         max_ball_radius = p2_result.get("max_ball_radius", 16)
         min_blob_radius = p2_result.get("min_ball_radius", 4) / 4
+
+        # Load rally bounds; rally frame numbers are browser-side (OpenCV frame_idx + 1).
+        rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
+        rally_intervals: list[tuple[int, int]] = sorted(
+            (r["start_frame"] - 1, r["stop_frame"] - 1)
+            for r in json.loads(rally_path.read_text()).get("rally", [])
+        )
+        rally_starts = [s for s, _ in rally_intervals]
+        rally_stops  = [e for _, e in rally_intervals]
 
         ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
         ann_by_frame: dict[int, dict] = {}
@@ -185,6 +198,13 @@ class Pass4:
                     f"Frame {frame_idx} of {out_frame}…",
                 )
 
+            stable_frame_count += 1
+
+            # Skip detection for frames outside all recorded rally bounds.
+            rally_idx = bisect.bisect_right(rally_starts, frame_idx) - 1
+            if rally_idx < 0 or frame_idx > rally_stops[rally_idx]:
+                continue
+
             # --- Motion mask (use temporally closest median background) ---
             bg_blur = bg_blurs[_select_bg_index(frame_idx, fps, window_times)]
             motion_mask = detect_motion(frame, bg_blur, close_kernel)
@@ -233,8 +253,6 @@ class Pass4:
                 patch[dy1:dy2, dx1:dx2, 1] = hs_mask[sy1:sy2, sx1:sx2]      # G
                 patch[dy1:dy2, dx1:dx2, 0] = vs_mask[sy1:sy2, sx1:sx2]      # B
                 cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
-
-            stable_frame_count += 1
 
         cap.release()
 
