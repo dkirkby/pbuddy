@@ -155,7 +155,9 @@ class Pass4:
         max_blob_radius = max_ball_radius + close_kernel.shape[0]
         bg_h, bg_w   = bg_plate.shape[:2]
         half = 32   # patch half-size → 64×64 output
+        total_rally_frames = sum(e - s + 1 for s, e in rally_intervals)
         stable_frame_count = 0
+        in_rally_processed = 0
         detections = []
 
         for i in range(total_frames):
@@ -168,11 +170,21 @@ class Pass4:
             # the *next* frame, so the frame we hold is one behind that.
             frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
 
+            stable_frame_count += 1
+
+            # Skip detection for frames outside all recorded rally bounds.
+            rally_idx = bisect.bisect_right(rally_starts, frame_idx) - 1
+            in_rally = rally_idx >= 0 and frame_idx <= rally_stops[rally_idx]
+            if in_rally:
+                in_rally_processed += 1
+
+            frac = in_rally_processed / total_rally_frames if total_rally_frames else 0
+
             # Check for pause/cancel signal every 30 frames (~1 s at 30 fps).
             if i % 30 == 0:
                 progress.check_cancelled()
                 if pause_file.exists():
-                    current_fraction = 0.1 + 0.88 * i / total_frames
+                    current_fraction = 0.1 + 0.88 * frac
                     # Write partial results so the UI can show them while paused.
                     (raw_dir / "detections.json").write_text(json.dumps({
                         "stable_frame_count": stable_frame_count,
@@ -187,22 +199,18 @@ class Pass4:
                         progress.check_cancelled()
                         progress.update(
                             current_fraction, "paused",
-                            f"Paused at frame {frame_idx} — {len(detections)} detections so far",
+                            f"Paused at rally frame {in_rally_processed}/{total_rally_frames} — {len(detections)} detections so far",
                         )
                         time.sleep(1.0)
 
             if i % 150 == 0:
                 progress.update(
-                    0.1 + 0.88 * i / total_frames,
+                    0.1 + 0.88 * frac,
                     "detecting",
-                    f"Frame {frame_idx} of {out_frame}…",
+                    f"Rally frame {in_rally_processed} of {total_rally_frames}…",
                 )
 
-            stable_frame_count += 1
-
-            # Skip detection for frames outside all recorded rally bounds.
-            rally_idx = bisect.bisect_right(rally_starts, frame_idx) - 1
-            if rally_idx < 0 or frame_idx > rally_stops[rally_idx]:
+            if not in_rally:
                 continue
 
             # --- Motion mask (use temporally closest median background) ---
