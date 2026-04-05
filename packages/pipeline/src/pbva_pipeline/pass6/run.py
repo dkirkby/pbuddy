@@ -56,9 +56,10 @@ def _render_overlay(
 ) -> np.ndarray | None:
     """Return a BGRA overlay (same HxW, uint8) to alpha-blend onto frame_bgr, or None for no-op.
 
-    This is the extension point for future overlay graphics (score display,
-    player names, ball tracking, etc.).  Returning None avoids any blending
-    cost and is the correct default until overlays are implemented.
+    Extension point for additional per-frame overlay graphics (ball tracking,
+    etc.).  The score/name overlay is handled separately by
+    _build_score_overlay and pre-computed once per rally.  Returning None
+    avoids any blending cost.
 
     Args:
         frame_bgr: source video frame as HxW×3 uint8 BGR numpy array.
@@ -69,6 +70,215 @@ def _render_overlay(
             stop_frame, serverName, receiverName, servingTeamWinsRally).
     """
     return None
+
+
+# ---------------------------------------------------------------------------
+# Score / name overlay
+# ---------------------------------------------------------------------------
+
+# Candidate font paths tried in order; first hit wins.
+_FONT_PATHS = [
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/Library/Fonts/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+]
+
+
+def _load_font(size: int):
+    """Return a PIL FreeTypeFont at *size* pt, falling back to the bitmap default."""
+    from PIL import ImageFont
+    for path in _FONT_PATHS:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return ImageFont.load_default()
+
+
+def _build_score_overlay(
+    frame_shape: tuple[int, int],
+    rally: dict,
+    player_names: dict,
+    corner: str = "upper_right",
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Pre-compute the score/name overlay for one rally.
+
+    Returns (overlay_bgr_f32, alpha_f32) both shaped (H, W, 3) and (H, W, 1),
+    ready for the blending expression:
+        out = frame_bgr * (1 - alpha) + overlay_bgr * alpha
+
+    The overlay is constant for every frame in the rally (score and server
+    do not change within a rally), so calling this once per rally and reusing
+    the result avoids redundant PIL rendering.
+
+    corner: "upper_right" | "upper_left" | "lower_right" | "lower_left"
+
+    Returns None when player_names is empty (no data to display).
+
+    Layout (2 × 2 grid, no visible grid lines):
+        ┌──────────────────┬────────┐
+        │ serving team     │  a     │  ← team that served first in the game
+        ├──────────────────┼────────┤
+        │ receiving team   │  b     │
+        └──────────────────┴────────┘
+    where score "a-b-s" with serving_score=a / receiving_score=b when the
+    initial serving team is currently serving, swapped otherwise.
+
+    Name format:
+        serving team  → "first_server/second_server"
+                         (serving_team_left = server 1 at n-m-1,
+                          serving_team_right = server 2 at n-m-2)
+        receiving team → "right_player/left_player"
+
+    The current server (rally["serverName"]) is underlined.
+
+    Background colours: white (semi-transparent) for the name column,
+    dark green for the score column.  All text is white; a thin dark stroke
+    is applied on the name column for legibility against the light background.
+    """
+    if not player_names:
+        return None
+
+    from PIL import Image, ImageDraw
+
+    h, w = frame_shape
+
+    # ---- Players ----
+    sv_first = player_names.get("serving_team_left", "?")    # server 1 (n-m-1)
+    sv_second = player_names.get("serving_team_right", "?")  # server 2 (n-m-2)
+    rv_right = player_names.get("receiving_team_right", "?")
+    rv_left = player_names.get("receiving_team_left", "?")
+    current_server = rally.get("serverName", "")
+
+    # Which players are on the initial serving team?
+    initial_serving = {sv_first, sv_second}
+
+    # ---- Score ----
+    score_parts = rally.get("score", "0-0-0").split("-")
+    raw_a, raw_b = score_parts[0], score_parts[1]
+    if current_server in initial_serving:
+        top_score, bot_score = raw_a, raw_b   # initial-serving team is still serving
+    else:
+        top_score, bot_score = raw_b, raw_a   # initial-serving team is now receiving
+
+    # ---- Layout (scales with frame height) ----
+    scale = h / 720.0
+    row_h = max(26, round(30 * scale))
+    font_sz = max(11, round(13 * scale))
+    pad_x = max(6, round(8 * scale))
+    margin = max(8, round(10 * scale))
+    stroke_w = max(1, round(scale))
+
+    font = _load_font(font_sz)
+
+    # Measure text widths on a throw-away image.
+    _dummy = Image.new("RGBA", (1, 1))
+    _dd = ImageDraw.Draw(_dummy)
+
+    def _tw(text: str) -> int:
+        bb = _dd.textbbox((0, 0), text, font=font)
+        return bb[2] - bb[0]
+
+    def _th(text: str) -> int:
+        bb = _dd.textbbox((0, 0), text, font=font)
+        return bb[3] - bb[1]
+
+    sep_w = _tw("/")
+    name_col_w = (
+        max(
+            _tw(sv_first) + sep_w + _tw(sv_second),
+            _tw(rv_right) + sep_w + _tw(rv_left),
+        )
+        + 2 * pad_x
+    )
+    score_col_w = max(_tw("00") + 2 * pad_x, round(36 * scale))
+    total_w = name_col_w + score_col_w
+    total_h = 2 * row_h
+
+    # ---- PIL image ----
+    img = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    NAME_BG = (255, 255, 255, 160)   # semi-transparent white
+    SCORE_BG = (0, 100, 45, 225)     # dark green
+    WHITE = (255, 255, 255, 255)
+    STROKE = (0, 0, 0, 110)          # thin dark halo for white-on-white legibility
+
+    for row in range(2):
+        y0, y1 = row * row_h, (row + 1) * row_h
+        draw.rectangle([0, y0, name_col_w - 1, y1 - 1], fill=NAME_BG)
+        draw.rectangle([name_col_w, y0, total_w - 1, y1 - 1], fill=SCORE_BG)
+
+    # Subtle row separator inside score column only (avoids visible grid lines
+    # on the name side, preserving the "no grid lines" requirement).
+    draw.line([name_col_w, row_h, total_w - 1, row_h], fill=(0, 60, 25, 180), width=1)
+
+    def _draw_stroked(x: int, ty: int, text: str, underline: bool = False) -> int:
+        """Draw *text* at (x, ty) with a stroke halo; return rendered width."""
+        bb = draw.textbbox((x, ty), text, font=font)
+        tw = bb[2] - bb[0]
+        th = bb[3] - bb[1]
+        # Stroke (drawn first, slightly offset in 4 directions)
+        for dx, dy in ((-stroke_w, 0), (stroke_w, 0), (0, -stroke_w), (0, stroke_w)):
+            draw.text((x + dx, ty + dy), text, font=font, fill=STROKE)
+        draw.text((x, ty), text, font=font, fill=WHITE)
+        if underline:
+            uy = ty + th + max(1, round(scale))
+            draw.line([x, uy, x + tw, uy], fill=WHITE, width=stroke_w)
+        return tw
+
+    def _draw_score(text: str, cell_x: int, cell_w: int, y_mid: int) -> None:
+        bb = _dd.textbbox((0, 0), text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        x = cell_x + (cell_w - tw) // 2
+        ty = y_mid - th // 2
+        draw.text((x, ty), text, font=font, fill=WHITE)
+
+    def _text_top(row: int) -> int:
+        """Vertically centred top-of-text y for the given row."""
+        row_mid = row * row_h + row_h // 2
+        th = _th("Ay")   # representative ascender height
+        return row_mid - th // 2
+
+    # Row 0 — serving team
+    ty0 = _text_top(0)
+    x = pad_x
+    x += _draw_stroked(x, ty0, sv_first,  underline=(current_server == sv_first))
+    x += _draw_stroked(x, ty0, "/")
+    x += _draw_stroked(x, ty0, sv_second, underline=(current_server == sv_second))
+    _draw_score(top_score, name_col_w, score_col_w, row_h // 2)
+
+    # Row 1 — receiving team
+    ty1 = _text_top(1)
+    x = pad_x
+    x += _draw_stroked(x, ty1, rv_right, underline=(current_server == rv_right))
+    x += _draw_stroked(x, ty1, "/")
+    x += _draw_stroked(x, ty1, rv_left,  underline=(current_server == rv_left))
+    _draw_score(bot_score, name_col_w, score_col_w, row_h + row_h // 2)
+
+    # ---- Position in full frame ----
+    ox, oy = total_w, total_h
+    if corner == "upper_right":
+        r0, c0 = margin, w - ox - margin
+    elif corner == "upper_left":
+        r0, c0 = margin, margin
+    elif corner == "lower_right":
+        r0, c0 = h - oy - margin, w - ox - margin
+    else:  # lower_left
+        r0, c0 = h - oy - margin, margin
+
+    # ---- Convert PIL RGBA → full-frame BGRA float32 arrays ----
+    rgba = np.array(img, dtype=np.float32)           # (total_h, total_w, 4)
+    bgr_patch = rgba[:, :, [2, 1, 0]]               # BGR
+    alpha_patch = rgba[:, :, 3:4] / 255.0
+
+    ov_bgr = np.zeros((h, w, 3), dtype=np.float32)
+    ov_alpha = np.zeros((h, w, 1), dtype=np.float32)
+    ov_bgr[r0:r0 + oy, c0:c0 + ox] = bgr_patch
+    ov_alpha[r0:r0 + oy, c0:c0 + ox] = alpha_patch
+
+    return ov_bgr, ov_alpha
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +454,7 @@ class Pass6:
         # Pass 6 parameters
         fade_time: float = 0.5        # seconds, cross-fade between median and rally content
         audio_fade_time: float = 0.25  # seconds, audio fade-in/out within each rally
+        overlay_corner: str = "upper_right"  # score overlay position
 
         # ------------------------------------------------------------------
         # 1. Load rally data + probe source video
@@ -252,6 +463,7 @@ class Pass6:
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
         rally_data = json.loads(rally_path.read_text())
         rallies: list[dict] = rally_data.get("rally", [])
+        player_names: dict = rally_data.get("player_names", {})
         if not rallies:
             raise ValueError("No rallies found in pass2/accepted/rally.json")
 
@@ -378,6 +590,13 @@ class Pass6:
                 rally_mid_s, median_images, median_window_times, width, height
             )
 
+            # Pre-compute the score overlay for this rally.  Score and server
+            # are constant across all frames in a rally, so rendering once
+            # and reusing avoids per-frame PIL overhead.
+            score_ov = _build_score_overlay(
+                (height, width), rally, player_names, overlay_corner
+            )
+
             # Seek to just before the start of this rally.  PyAV seeks to the
             # nearest keyframe at or before the target PTS.
             seek_pts = int(max(0, (start_frame - 1) / fps) / float(src_v.time_base))
@@ -399,6 +618,7 @@ class Pass6:
                 # Convert to BGR numpy array for overlay compositing.
                 bgr = frame.to_ndarray(format="bgr24")
 
+                # Extension-point overlay (ball tracking, etc.).
                 overlay = _render_overlay(
                     bgr, rally_idx, src_frame_num, out_frame_idx, rally
                 )
@@ -408,6 +628,13 @@ class Pass6:
                     bgr = (
                         bgr.astype(np.float32) * (1.0 - alpha)
                         + overlay[:, :, :3].astype(np.float32) * alpha
+                    ).clip(0, 255).astype(np.uint8)
+
+                # Score/name overlay (pre-computed once per rally).
+                if score_ov is not None:
+                    ov_bgr, ov_alpha = score_ov
+                    bgr = (
+                        bgr.astype(np.float32) * (1.0 - ov_alpha) + ov_bgr * ov_alpha
                     ).clip(0, 255).astype(np.uint8)
 
                 if first_bgr is None:
