@@ -145,22 +145,52 @@ def _build_score_overlay(
     h, w = frame_shape
 
     # ---- Players ----
-    sv_first = player_names.get("serving_team_left", "?")    # server 1 (n-m-1)
-    sv_second = player_names.get("serving_team_right", "?")  # server 2 (n-m-2)
-    rv_right = player_names.get("receiving_team_right", "?")
-    rv_left = player_names.get("receiving_team_left", "?")
+    # Initial team membership from player_names.
+    sv_a = player_names.get("serving_team_left", "?")    # initial serving-team player A
+    sv_b = player_names.get("serving_team_right", "?")   # initial serving-team player B
+    rv_a = player_names.get("receiving_team_right", "?") # initial receiving-team player A
+    rv_b = player_names.get("receiving_team_left", "?")  # initial receiving-team player B
+    initial_sv_set = frozenset({sv_a, sv_b})
+
     current_server = rally.get("serverName", "")
+    current_receiver = rally.get("receiverName", "")
 
-    # Which players are on the initial serving team?
-    initial_serving = {sv_first, sv_second}
-
-    # ---- Score ----
     score_parts = rally.get("score", "0-0-0").split("-")
     raw_a, raw_b = score_parts[0], score_parts[1]
-    if current_server in initial_serving:
-        top_score, bot_score = raw_a, raw_b   # initial-serving team is still serving
+    server_num = int(score_parts[2]) if score_parts[2].isdigit() else 2
+
+    # Identify each player's team and teammate.
+    if current_server in initial_sv_set:
+        server_team = initial_sv_set
+        receiver_team = frozenset({rv_a, rv_b})
+        top_score, bot_score = raw_a, raw_b   # initial serving team still serving
     else:
-        top_score, bot_score = raw_b, raw_a   # initial-serving team is now receiving
+        server_team = frozenset({rv_a, rv_b})
+        receiver_team = initial_sv_set
+        top_score, bot_score = raw_b, raw_a   # initial serving team now receiving
+
+    server_mate = next(iter(server_team - {current_server})) if current_server in server_team else "?"
+    receiver_mate = next(iter(receiver_team - {current_receiver})) if current_receiver in receiver_team else "?"
+
+    # Serving team: server 1 listed first (determined by server_num in score).
+    if server_num == 1:
+        sv_s1, sv_s2 = current_server, server_mate
+    else:
+        sv_s1, sv_s2 = server_mate, current_server
+
+    # Receiving team: current right-side player (receiverName) is listed first.
+    rv_s1, rv_s2 = current_receiver, receiver_mate
+
+    # Assign to fixed rows: top = initial serving team, bottom = initial receiving team.
+    if current_server in initial_sv_set:
+        top_s1, top_s2 = sv_s1, sv_s2
+        bot_s1, bot_s2 = rv_s1, rv_s2
+    else:
+        top_s1, top_s2 = rv_s1, rv_s2
+        bot_s1, bot_s2 = sv_s1, sv_s2
+
+    # ---- Score ----
+    # (top_score, bot_score already set above)
 
     # ---- Layout (scales with frame height) ----
     scale = h / 720.0
@@ -187,8 +217,8 @@ def _build_score_overlay(
     sep_w = _tw("/")
     name_col_w = (
         max(
-            _tw(sv_first) + sep_w + _tw(sv_second),
-            _tw(rv_right) + sep_w + _tw(rv_left),
+            _tw(sv_a) + sep_w + _tw(sv_b),
+            _tw(rv_a) + sep_w + _tw(rv_b),
         )
         + 2 * pad_x
     )
@@ -241,20 +271,20 @@ def _build_score_overlay(
         th = _th("Ay")   # representative ascender height
         return row_mid - th // 2
 
-    # Row 0 — serving team
+    # Row 0 — initial serving team
     ty0 = _text_top(0)
     x = pad_x
-    x += _draw_stroked(x, ty0, sv_first,  underline=(current_server == sv_first))
+    x += _draw_stroked(x, ty0, top_s1, underline=(current_server == top_s1))
     x += _draw_stroked(x, ty0, "/")
-    x += _draw_stroked(x, ty0, sv_second, underline=(current_server == sv_second))
+    x += _draw_stroked(x, ty0, top_s2, underline=(current_server == top_s2))
     _draw_score(top_score, name_col_w, score_col_w, row_h // 2)
 
-    # Row 1 — receiving team
+    # Row 1 — initial receiving team
     ty1 = _text_top(1)
     x = pad_x
-    x += _draw_stroked(x, ty1, rv_right, underline=(current_server == rv_right))
+    x += _draw_stroked(x, ty1, bot_s1, underline=(current_server == bot_s1))
     x += _draw_stroked(x, ty1, "/")
-    x += _draw_stroked(x, ty1, rv_left,  underline=(current_server == rv_left))
+    x += _draw_stroked(x, ty1, bot_s2, underline=(current_server == bot_s2))
     _draw_score(bot_score, name_col_w, score_col_w, row_h + row_h // 2)
 
     # ---- Position in full frame ----
