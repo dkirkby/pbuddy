@@ -58,7 +58,7 @@ uv run pytest tests/integration/test_pass1_smoke.py -m slow -v -s
 
 ## Architecture Overview
 
-PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 4-pass sequential pipeline:
+PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 5-pass sequential pipeline:
 
 ```
 Browser (React UI)
@@ -84,7 +84,7 @@ Each pass follows the **accepted-state pattern**:
 | 2 | Ball annotation | Per-frame ball position + radius annotations, patch images |
 | 3 | Ball color tagging | RGB+HSV pixel samples, hue-saturation & value-saturation scatter plots |
 | 4 | Ball detection | Per-frame motion+color+silhouette candidate detections across stable range |
-| 5 | Segment building | Trajectory segments grouped from Pass 4 detections |
+| 5 | Segment building | Trajectory segments grouped from Pass 4 detections; filtered by min length (5) and min mean speed (5 px/fr); each segment carries `first_frame`, `last_frame`, `length`, `mean_speed_px_per_frame`, `detections`; user can delete segments before accepting |
 
 ### Project Artifact Layout
 
@@ -93,7 +93,7 @@ data/projects/<project_id>/
 ├── uploads/original.mp4
 ├── derived/            # normalized video, thumbnails, audio
 └── passes/
-    └── pass{1-4}/
+    └── pass{1-5}/
         ├── raw/        # system output
         ├── corrections/ # user-submitted corrections
         └── accepted/   # merged, used by downstream passes
