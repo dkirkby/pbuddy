@@ -29,12 +29,23 @@ def _predict_position(seg: list[dict], frame: int) -> tuple[float, float] | None
     return last["cx"] + vx * gap, last["cy"] + vy * gap
 
 
+def _mean_speed(dets: list[dict]) -> float:
+    if len(dets) < 2:
+        return 0.0
+    steps = [
+        math.hypot(dets[j+1]["cx"] - dets[j]["cx"], dets[j+1]["cy"] - dets[j]["cy"])
+        for j in range(len(dets) - 1)
+    ]
+    return sum(steps) / len(steps)
+
+
 def _build_segments(
     detections: list[dict],
     max_gap_frames: int,
     large_gate_px: float,
     small_gate_px: float,
     min_segment_length: int,
+    min_speed_px_per_frame: float,
 ) -> list[dict]:
     """Group flat detection list into trajectory segments.
 
@@ -100,23 +111,18 @@ def _build_segments(
 
     completed.extend(active)
 
-    # Discard short segments (noise), sort by first frame, assign IDs.
+    # Discard short or slow segments (noise), sort by first frame, assign IDs.
     segments = []
     for i, dets in enumerate(sorted(
-        (s for s in completed if len(s) >= min_segment_length),
+        (s for s in completed if len(s) >= min_segment_length and _mean_speed(s) >= min_speed_px_per_frame),
         key=lambda s: s[0]["frame"],
     )):
-        steps = [
-            math.hypot(dets[j+1]["cx"] - dets[j]["cx"], dets[j+1]["cy"] - dets[j]["cy"])
-            for j in range(len(dets) - 1)
-        ]
-        mean_speed = sum(steps) / len(steps) if steps else 0.0
         segments.append({
             "id": i,
             "first_frame": dets[0]["frame"],
             "last_frame": dets[-1]["frame"],
             "length": len(dets),
-            "mean_speed_px_per_frame": round(mean_speed, 2),
+            "mean_speed_px_per_frame": round(_mean_speed(dets), 2),
             "detections": dets,
         })
     return segments
@@ -139,6 +145,7 @@ class Pass5:
         large_gate_px: float = 150.0
         small_gate_px: float = 50.0
         min_segment_length: int = 5
+        min_speed_px_per_frame: float = 5.0
 
         progress.update(0.05, "load", "Loading pass 4 detections…")
         det_path = ctx.paths.project_root / "passes" / "pass4" / "accepted" / "detections.json"
@@ -146,7 +153,7 @@ class Pass5:
         detections: list[dict] = raw.get("detections", [])
 
         progress.update(0.10, "segment", f"Building segments from {len(detections)} detections…")
-        segments = _build_segments(detections, max_gap_frames, large_gate_px, small_gate_px, min_segment_length)
+        segments = _build_segments(detections, max_gap_frames, large_gate_px, small_gate_px, min_segment_length, min_speed_px_per_frame)
 
         progress.update(0.90, "write", "Writing segments.json…")
         raw_dir = ctx.paths.pass_raw_dir
@@ -157,6 +164,7 @@ class Pass5:
             "large_gate_px": large_gate_px,
             "small_gate_px": small_gate_px,
             "min_segment_length": min_segment_length,
+            "min_speed_px_per_frame": min_speed_px_per_frame,
             "segments": segments,
         }
         (raw_dir / "segments.json").write_text(json.dumps(output, indent=2))
@@ -183,13 +191,19 @@ class Pass5:
         raw_result: Pass5RawResult | dict,
         corrections: dict | None,
     ) -> Pass5AcceptedOutput:
-        import shutil
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
         src = ctx.paths.pass_raw_dir / "segments.json"
         if src.exists():
-            shutil.copy2(src, accepted_dir / "segments.json")
-        count = raw_result.segment_count if isinstance(raw_result, Pass5RawResult) else raw_result.get("segment_count", 0)
+            raw_data = json.loads(src.read_text())
+            deleted_ids: set[int] = set(corrections.get("deleted_segment_ids", [])) if corrections else set()
+            kept = [s for s in raw_data.get("segments", []) if s["id"] not in deleted_ids]
+            # Re-number IDs to be contiguous after deletions.
+            for i, seg in enumerate(kept):
+                seg["id"] = i
+            output = {**raw_data, "segment_count": len(kept), "segments": kept}
+            (accepted_dir / "segments.json").write_text(json.dumps(output, indent=2))
+        count = len(kept) if src.exists() else 0
         accepted = Pass5AcceptedOutput(segment_count=count)
         (accepted_dir / "result.json").write_text(accepted.model_dump_json(indent=2))
         return accepted

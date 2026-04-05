@@ -15,6 +15,7 @@ export default function Pass5Page() {
   const [accepting, setAccepting] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
+  const [dirty, setDirty] = useState(false)
   const [selectedSegId, setSelectedSegId] = useState<number | null>(null)
   const hasEnteredSelectedRef = useRef(false)
 
@@ -49,11 +50,14 @@ export default function Pass5Page() {
   })
   const rallies = pass2Corrections?.data?.rally ?? []
 
+  const savePass5 = useMutation({
+    mutationFn: () => api.savePass5Corrections(projectId!, [...deletedIds]),
+    onSuccess: () => setDirty(false),
+  })
+
   const acceptPass5 = useMutation({
     mutationFn: async () => {
-      if (deletedIds.size > 0) {
-        await api.savePass5Corrections(projectId!, [...deletedIds])
-      }
+      if (dirty) await api.savePass5Corrections(projectId!, [...deletedIds])
       return api.acceptPass5(projectId!)
     },
     onSuccess: () => {
@@ -167,6 +171,13 @@ export default function Pass5Page() {
             </span>
           )}
           <button
+            onClick={() => savePass5.mutate()}
+            disabled={!dirty || savePass5.isPending || accepting}
+            style={{ padding: '6px 18px', cursor: 'pointer' }}
+          >
+            {savePass5.isPending ? 'Saving…' : 'Save'}
+          </button>
+          <button
             onClick={() => { setAccepting(true); acceptPass5.mutate() }}
             disabled={accepting || acceptPass5.isPending || !segData}
             style={{ padding: '6px 18px', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
@@ -238,7 +249,7 @@ export default function Pass5Page() {
                     <td style={td}>{seg.mean_speed_px_per_frame?.toFixed(1) ?? '—'}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <button
-                        onClick={(e) => { e.stopPropagation(); setDeletedIds(prev => new Set([...prev, seg.id])) }}
+                        onClick={(e) => { e.stopPropagation(); setDeletedIds(prev => new Set([...prev, seg.id])); setDirty(true) }}
                         title="Delete segment"
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c00', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
                       >✕</button>
