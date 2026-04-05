@@ -33,15 +33,17 @@ _RUN_RESETS_STATUS: dict[str, ProjectStatus] = {
     "pass3": ProjectStatus.pass2_accepted,
     "pass4": ProjectStatus.pass3_accepted,
     "pass5": ProjectStatus.pass4_accepted,
+    "pass6": ProjectStatus.pass2_accepted,
 }
 
 # Passes that must be invalidated when a given pass is re-run.
 _DOWNSTREAM_PASSES: dict[str, list[str]] = {
-    "pass1": ["pass2", "pass3", "pass4", "pass5"],
-    "pass2": ["pass3", "pass4", "pass5"],
+    "pass1": ["pass2", "pass3", "pass4", "pass5", "pass6"],
+    "pass2": ["pass3", "pass4", "pass5", "pass6"],
     "pass3": ["pass4", "pass5"],
     "pass4": ["pass5"],
     "pass5": [],
+    "pass6": [],
 }
 
 
@@ -984,3 +986,105 @@ def accept_pass5(
     ))
     db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Pass 6 — Video Export: raw file access, accept
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{project_id}/passes/pass6/raw/{filename}")
+def get_pass6_raw_file(
+    project_id: str,
+    filename: str,
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass6")
+    path = (raw_dir / filename).resolve()
+    try:
+        path.relative_to(raw_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    suffix = path.suffix.lstrip(".")
+    if suffix == "json":
+        return JSONResponse(content=json.loads(path.read_text()))
+    if suffix == "mp4":
+        from fastapi.responses import FileResponse as _FR
+        return _FR(str(path), media_type="video/mp4", filename=filename)
+    return FileResponse(str(path), media_type="application/octet-stream")
+
+
+@router.post("/{project_id}/passes/pass6/accept")
+def accept_pass6(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass6")
+    if pass_row.state != PassState.waiting_for_user.value:
+        raise HTTPException(status_code=409, detail=f"Pass 6 is in state '{pass_row.state}', cannot accept")
+
+    from pbva_core import paths as p
+    raw_dir = p.pass_raw_dir(settings.data_root, project_id, "pass6")
+    accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass6")
+    accepted_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_result_path = raw_dir / "result.json"
+    if not raw_result_path.exists():
+        raise HTTPException(status_code=500, detail="Pass 6 result.json not found")
+
+    from pbva_core.types import Pass6RawResult
+    raw_result = Pass6RawResult.model_validate_json(raw_result_path.read_text())
+
+    from pbva_pipeline.pass6.run import Pass6
+    from pbva_pipeline.base import NullProgress, PassPaths, PassContext
+
+    project = db.get(Project, project_id)
+    ctx = PassContext(
+        project_id=project_id,
+        project_name=project.name,
+        video_path=p.project_root(settings.data_root, project_id) / "uploads" / "original.mp4",
+        video_duration_s=project.video_duration_s or 0.0,
+        video_fps=project.video_fps or 30.0,
+        video_width=project.video_width or 1920,
+        video_height=project.video_height or 1080,
+        paths=PassPaths(
+            project_root=p.project_root(settings.data_root, project_id),
+            uploads_dir=p.uploads_dir(settings.data_root, project_id),
+            derived_dir=p.derived_dir(settings.data_root, project_id),
+            pass_raw_dir=raw_dir,
+            pass_corrections_dir=p.pass_corrections_dir(settings.data_root, project_id, "pass6"),
+            pass_accepted_dir=accepted_dir,
+        ),
+        settings=settings,
+        job_id=pass_row.current_job_id or "",
+        progress=NullProgress(),
+    )
+    accepted = Pass6().build_accepted_output(ctx, raw_result, None)
+
+    art_id = str(uuid.uuid4())
+    db.add(Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass6",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="mp4",
+        path=str(accepted_dir / "export.mp4"),
+    ))
+    pass_row.state = PassState.accepted.value
+    pass_row.latest_accepted_artifact_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    project.status = ProjectStatus.replay_ready.value
+    project.updated_at = _utcnow()
+
+    db.add(Event(
+        project_id=project_id,
+        event_type="pass_accepted",
+        payload_json=json.dumps({"pass_name": "pass6"}),
+    ))
+    db.commit()
+    return {"ok": True, "data": accepted.model_dump(mode="json")}

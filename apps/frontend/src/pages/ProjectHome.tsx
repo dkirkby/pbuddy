@@ -89,6 +89,14 @@ export default function ProjectHome() {
     },
   })
 
+  const runPass6 = useMutation({
+    mutationFn: () => api.runPass6(projectId!),
+    onSuccess: () => {
+      setProgress(null)
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+    },
+  })
+
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
@@ -96,6 +104,7 @@ export default function ProjectHome() {
   const pass3 = project.passes.find((p) => p.pass_name === 'pass3')
   const pass4 = project.passes.find((p) => p.pass_name === 'pass4')
   const pass5 = project.passes.find((p) => p.pass_name === 'pass5')
+  const pass6 = project.passes.find((p) => p.pass_name === 'pass6')
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -194,6 +203,20 @@ export default function ProjectHome() {
         onRun={() => runPass5.mutate()}
         isPending={runPass5.isPending}
         reviewPath={`/projects/${projectId}/pass5`}
+        reviewLabel="Review →"
+      />
+
+      {/* Pass 6 card */}
+      <PassCard
+        title="Pass 6 — Video Export"
+        description="Concatenates rally segments into a highlight reel with chapter markers, preserving source quality."
+        pass={pass6}
+        prereqMet={pass2?.state === 'accepted'}
+        prereqLabel="Complete Pass 2 first."
+        progress={progress?.passName === 'pass6' ? progress : null}
+        onRun={() => runPass6.mutate()}
+        isPending={runPass6.isPending}
+        reviewPath={`/projects/${projectId}/pass6`}
         reviewLabel="Review →"
       />
     </div>

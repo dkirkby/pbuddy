@@ -5,6 +5,7 @@ import type {
   Pass1CorrectionPayload,
   Pass2Corrections,
   Pass5Segments,
+  Pass6RawResult,
   ProjectDetail,
   ProjectSummary,
 } from '../types/api'
@@ -141,6 +142,18 @@ export const api = {
 
   acceptPass2: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),
+
+  runPass6: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass6/run`),
+
+  acceptPass6: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass6/accept`),
+
+  getPass6Result: (projectId: string) =>
+    get<Pass6RawResult>(`/api/projects/${projectId}/passes/pass6/raw/result.json`),
+
+  pass6ExportUrl: (projectId: string) =>
+    `/api/projects/${projectId}/passes/pass6/raw/export.mp4`,
 
   videoUrl: (projectId: string) => `/api/projects/${projectId}/video`,
 

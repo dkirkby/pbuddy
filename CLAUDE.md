@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Passes 1–5 are implemented end-to-end (run → review → accept). Key reference documents:
+Passes 1–6 are implemented end-to-end (run → review → accept). Key reference documents:
 
 - `VISION.md` — requirements and accuracy targets
 - `PIPELINE.md` — the 4-pass processing pipeline with user correction workflows
@@ -58,7 +58,7 @@ uv run pytest tests/integration/test_pass1_smoke.py -m slow -v -s
 
 ## Architecture Overview
 
-PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 5-pass sequential pipeline:
+PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 6-pass sequential pipeline:
 
 ```
 Browser (React UI)
@@ -68,6 +68,8 @@ FastAPI Backend  ←→  SQLite (metadata)
 Worker Process  ←→  Filesystem (artifacts)
   ↕
 Pass 1 → Pass 2 → Pass 3 → Pass 4 → Pass 5
+                ↘
+               Pass 6
 ```
 
 Each pass follows the **accepted-state pattern**:
@@ -76,7 +78,7 @@ Each pass follows the **accepted-state pattern**:
 3. User accepts; system merges raw + corrections into **accepted** artifacts
 4. Next pass depends **only** on accepted artifacts — never on raw outputs
 
-### The 5 Passes
+### The 6 Passes
 
 | Pass | Goal | Key outputs |
 |------|------|-------------|
@@ -85,6 +87,9 @@ Each pass follows the **accepted-state pattern**:
 | 3 | Ball color tagging | RGB+HSV pixel samples, hue-saturation & value-saturation scatter plots |
 | 4 | Ball detection | Per-frame motion+color+silhouette candidate detections across stable range |
 | 5 | Segment building | Trajectory segments grouped from Pass 4 detections; filtered by min length (5) and min mean speed (5 px/fr); each segment carries `first_frame`, `last_frame`, `length`, `mean_speed_px_per_frame`, `detections`; user can delete segments before accepting |
+| 6 | Video export | Highlight reel: rally segments from Pass 2 concatenated via ffmpeg concat demuxer (`-c copy`), chapter markers per rally (score as title), same resolution/fps/bitrate as source; no user corrections needed |
+
+Pass 6 depends on `pass2/accepted/rally.json` only (not on passes 3–5). Re-running Pass 1 or Pass 2 cascades to invalidate Pass 6.
 
 ### Project Artifact Layout
 
@@ -93,7 +98,7 @@ data/projects/<project_id>/
 ├── uploads/original.mp4
 ├── derived/            # normalized video, thumbnails, audio
 └── passes/
-    └── pass{1-5}/
+    └── pass{1-6}/
         ├── raw/        # system output
         ├── corrections/ # user-submitted corrections
         └── accepted/   # merged, used by downstream passes
@@ -134,6 +139,7 @@ POST   /api/projects/{id}/passes/{pass}/accept
 - `Pass3Page` — ball color polygon editor (SVG overlays on hue-saturation and value-saturation scatter plots)
 - `Pass4Page` — detection reviewer (video player with per-frame ball detection overlay)
 - `Pass5Page` — segment reviewer (video player with detection + segment polyline overlays)
+- `Pass6Page` — export reviewer (rally table with output timestamps, download link, accept button)
 
 ### Challenge Dataset
 

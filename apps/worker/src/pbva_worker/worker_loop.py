@@ -43,6 +43,9 @@ def _get_pass(pass_name: str):
         elif pass_name == "pass5":
             from pbva_pipeline.pass5.run import Pass5
             _PASS_REGISTRY["pass5"] = Pass5()
+        elif pass_name == "pass6":
+            from pbva_pipeline.pass6.run import Pass6
+            _PASS_REGISTRY["pass6"] = Pass6()
         else:
             raise ValueError(f"Unknown pass: {pass_name}")
     return _PASS_REGISTRY[pass_name]
@@ -54,6 +57,7 @@ _PASS_WAITING_STATUS = {
     "pass3": ProjectStatus.pass3_waiting_for_review,
     "pass4": ProjectStatus.pass4_waiting_for_review,
     "pass5": ProjectStatus.pass5_waiting_for_review,
+    "pass6": ProjectStatus.pass6_waiting_for_review,
 }
 
 

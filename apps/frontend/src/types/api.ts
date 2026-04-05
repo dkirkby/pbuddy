@@ -131,3 +131,8 @@ export interface Pass5Segments {
   min_segment_length: number
   segments: Pass5Segment[]
 }
+
+export interface Pass6RawResult {
+  rally_count: number
+  output_duration_s: number
+}

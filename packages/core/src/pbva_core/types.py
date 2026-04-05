@@ -182,3 +182,18 @@ class Pass5RawResult(BaseModel):
 
 class Pass5AcceptedOutput(BaseModel):
     segment_count: int
+
+
+# ---------------------------------------------------------------------------
+# Pass 6 domain types
+# ---------------------------------------------------------------------------
+
+
+class Pass6RawResult(BaseModel):
+    rally_count: int
+    output_duration_s: float
+
+
+class Pass6AcceptedOutput(BaseModel):
+    rally_count: int
+    output_duration_s: float
