@@ -599,7 +599,7 @@ class Pass6:
         out_v.width = width
         out_v.height = height
         out_v.pix_fmt = "yuv420p"
-        out_v.options = {"crf": "18", "preset": "fast"}
+        out_v.options = {"crf": "18", "preset": "veryslow"}
 
         src = av.open(str(video_path))
         src_v = src.streams.video[0]
