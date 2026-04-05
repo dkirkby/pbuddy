@@ -4,9 +4,12 @@ Video frames are decoded and re-encoded via PyAV so that:
   - Cuts are frame-accurate (not keyframe-bounded)
   - Per-frame overlay graphics can be composited in _render_overlay()
 
-Audio (if present) is extracted from the source via ffmpeg's concat demuxer and
-muxed into the final output alongside the encoded video, so it stays cheap.
-Chapter markers are injected by ffmpeg in the same final mux step.
+Audio (if present) is handled in three steps:
+  1. The full source audio track is decoded to an uncompressed PCM WAV file.
+  2. Segments are sliced at exactly the same sample positions that correspond
+     to the video frame boundaries, giving sample-accurate sync with no gaps.
+  3. The spliced WAV is AAC-encoded and muxed into the final MP4 alongside
+     the encoded video and chapter markers.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import json
 import subprocess
 import threading
 import time
+import wave
 from fractions import Fraction
 from pathlib import Path
 
@@ -36,7 +40,7 @@ def _render_overlay(
     output_frame_number: int,
     rally: dict,
 ) -> np.ndarray | None:
-    """Return an BGRA overlay (same HxW, uint8) to blend onto frame_bgr, or None for no-op.
+    """Return a BGRA overlay (same HxW, uint8) to alpha-blend onto frame_bgr, or None for no-op.
 
     This is the extension point for future overlay graphics (score display,
     player names, ball tracking, etc.).  Returning None avoids any blending
@@ -51,6 +55,70 @@ def _render_overlay(
             stop_frame, serverName, receiverName, servingTeamWinsRally).
     """
     return None
+
+
+# ---------------------------------------------------------------------------
+# Audio helpers
+# ---------------------------------------------------------------------------
+
+def _extract_full_audio(ffmpeg_bin: str, video_path: Path, out_wav: Path) -> None:
+    """Decode the entire source audio track to a 16-bit PCM WAV file.
+
+    Forces pcm_s16le so that numpy int16 slicing is straightforward.
+    The original sample rate is preserved.
+    """
+    out_wav.unlink(missing_ok=True)
+    result = subprocess.run(
+        [
+            ffmpeg_bin, "-y",
+            "-i", str(video_path),
+            "-vn",
+            "-acodec", "pcm_s16le",
+            str(out_wav),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Audio extraction failed: {result.stderr[-300:]}")
+
+
+def _splice_audio(
+    src_wav: Path,
+    out_wav: Path,
+    chapter_info: list[dict],
+    fps: float,
+) -> None:
+    """Slice rally segments from src_wav and write a gapless spliced WAV.
+
+    Splice points are computed from the same start_frame/fps times used by
+    the PyAV encode loop, so audio and video cuts are sample-aligned.
+    The full WAV is loaded into memory as a numpy array; at ~10 MB/min of
+    stereo 48 kHz audio this is well within available RAM for any match.
+    """
+    with wave.open(str(src_wav), "r") as wf:
+        sample_rate = wf.getframerate()
+        n_channels = wf.getnchannels()
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
+
+    # pcm_s16le guaranteed by _extract_full_audio.
+    audio = np.frombuffer(raw, dtype=np.int16).reshape(-1, n_channels)
+
+    segments = []
+    for c in chapter_info:
+        s0 = round(c["start_frame"] / fps * sample_rate)
+        s1 = min(round((c["stop_frame"] + 1) / fps * sample_rate), n_frames)
+        segments.append(audio[s0:s1])
+
+    spliced = np.concatenate(segments, axis=0)
+
+    with wave.open(str(out_wav), "w") as wf:
+        wf.setnchannels(n_channels)
+        wf.setsampwidth(2)          # int16 = 2 bytes
+        wf.setframerate(sample_rate)
+        wf.writeframes(spliced.tobytes())
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +139,7 @@ class Pass6:
             progress = NullProgress()
 
         # ------------------------------------------------------------------
-        # 1. Load rally data + probe source video (all fast setup)
+        # 1. Load rally data + probe source video
         # ------------------------------------------------------------------
         progress.update(0.01, "prepare", "Loading rally data and probing video…")
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
@@ -87,7 +155,7 @@ class Pass6:
 
         src = av.open(str(video_path))
         v_stream = src.streams.video[0]
-        fps_frac: Fraction = v_stream.average_rate  # e.g. Fraction(30, 1)
+        fps_frac: Fraction = v_stream.average_rate
         fps = float(fps_frac)
         width = v_stream.width
         height = v_stream.height
@@ -116,20 +184,8 @@ class Pass6:
         total_duration_s = cumulative_s
 
         # ------------------------------------------------------------------
-        # 3. Write supporting files for the ffmpeg mux step
+        # 3. Write chapter metadata for the ffmpeg mux step
         # ------------------------------------------------------------------
-
-        # ffconcat for audio extraction (audio-only, keyframe-aligned cuts
-        # are close enough for a highlight reel)
-        concat_path = raw_dir / "concat_list.txt"
-        concat_lines = ["ffconcat version 1.0"]
-        for c in chapter_info:
-            concat_lines.append(f"file '{video_path}'")
-            concat_lines.append(f"inpoint {c['start_frame'] / fps:.6f}")
-            concat_lines.append(f"outpoint {(c['stop_frame'] + 1) / fps:.6f}")
-        concat_path.write_text("\n".join(concat_lines) + "\n")
-
-        # ffmetadata chapters at cumulative output timestamps
         meta_path = raw_dir / "chapters.ffmeta"
         meta_lines = [";FFMETADATA1", ""]
         for c in chapter_info:
@@ -144,6 +200,18 @@ class Pass6:
                 "",
             ]
         meta_path.write_text("\n".join(meta_lines))
+
+        # ------------------------------------------------------------------
+        # 4. Extract and splice audio (sample-accurate rally cuts)
+        # ------------------------------------------------------------------
+        spliced_wav_path: Path | None = None
+        if has_audio:
+            progress.update(0.015, "audio", "Extracting and splicing audio…")
+            full_wav_path = raw_dir / "full_audio.wav"
+            spliced_wav_path = raw_dir / "spliced_audio.wav"
+            _extract_full_audio(ctx.settings.ffmpeg_bin, video_path, full_wav_path)
+            _splice_audio(full_wav_path, spliced_wav_path, chapter_info, fps)
+            full_wav_path.unlink()
 
         # ------------------------------------------------------------------
         # 5. PyAV encode loop: decode rally frames, composite overlay, encode
@@ -198,13 +266,13 @@ class Pass6:
                     bgr, rally_idx, src_frame_num, out_frame_idx, rally
                 )
                 if overlay is not None:
-                    # Blend BGRA overlay onto bgr using alpha channel.
+                    # Alpha-blend BGRA overlay onto BGR frame.
                     alpha = overlay[:, :, 3:4].astype(np.float32) / 255.0
-                    bgr = (bgr.astype(np.float32) * (1 - alpha)
-                           + overlay[:, :, :3].astype(np.float32) * alpha
-                           ).clip(0, 255).astype(np.uint8)
+                    bgr = (
+                        bgr.astype(np.float32) * (1.0 - alpha)
+                        + overlay[:, :, :3].astype(np.float32) * alpha
+                    ).clip(0, 255).astype(np.uint8)
 
-                # Encode frame.
                 out_frame = av.VideoFrame.from_ndarray(bgr, format="bgr24")
                 out_frame = out_frame.reformat(format="yuv420p")
                 out_frame.pts = out_frame_idx
@@ -233,24 +301,24 @@ class Pass6:
         src.close()
 
         # ------------------------------------------------------------------
-        # 6. ffmpeg mux: video_only + audio (via ffconcat) + chapters
+        # 6. ffmpeg mux: encoded video + spliced audio + chapter markers
         # ------------------------------------------------------------------
         progress.update(0.96, "mux", "Muxing audio and chapter markers…")
 
         export_path = raw_dir / "export.mp4"
         export_path.unlink(missing_ok=True)
 
-        if has_audio:
+        if spliced_wav_path is not None:
             cmd = [
                 ctx.settings.ffmpeg_bin, "-y",
                 "-i", str(video_only_path),
-                "-f", "concat", "-safe", "0", "-i", str(concat_path),
+                "-i", str(spliced_wav_path),
                 "-f", "ffmetadata", "-i", str(meta_path),
                 "-map", "0:v",
                 "-map", "1:a",
                 "-map_metadata", "2",
                 "-c:v", "copy",
-                "-c:a", "copy",
+                "-c:a", "aac", "-b:a", "192k",
                 "-movflags", "+faststart",
                 "-loglevel", "error",
                 str(export_path),
@@ -285,6 +353,8 @@ class Pass6:
 
         # Clean up intermediates.
         video_only_path.unlink(missing_ok=True)
+        if spliced_wav_path is not None:
+            spliced_wav_path.unlink(missing_ok=True)
 
         # ------------------------------------------------------------------
         # 7. Write result
