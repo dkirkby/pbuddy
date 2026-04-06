@@ -67,36 +67,8 @@ export default function Pass6Page() {
         </p>
       )}
 
-      {/* Rally table */}
-      {rallyTimings.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 20 }}>
-          <thead>
-            <tr style={{ background: '#f5f5f5' }}>
-              <th style={th}>#</th>
-              <th style={th}>Score</th>
-              <th style={th}>Server</th>
-              <th style={th}>Receiver</th>
-              <th style={th}>Chapter start</th>
-              <th style={th}>Duration</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rallyTimings.map((r, i) => (
-              <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={td}>{i + 1}</td>
-                <td style={{ ...td, fontWeight: 'bold' }}>{r.score}</td>
-                <td style={td}>{r.serverName}</td>
-                <td style={td}>{r.receiverName}</td>
-                <td style={{ ...td, fontFamily: 'monospace' }}>{formatTime(r.outputStart)}</td>
-                <td style={{ ...td, fontFamily: 'monospace' }}>{r.duration.toFixed(1)}s</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
       {/* Actions */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
         {pass6State === 'waiting_for_user' && (
           <>
             <a
@@ -150,6 +122,34 @@ export default function Pass6Page() {
           </>
         )}
       </div>
+
+      {/* Rally table */}
+      {rallyTimings.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 20 }}>
+          <thead>
+            <tr style={{ background: '#f5f5f5' }}>
+              <th style={th}>#</th>
+              <th style={th}>Score</th>
+              <th style={th}>Server</th>
+              <th style={th}>Receiver</th>
+              <th style={th}>Chapter start</th>
+              <th style={th}>Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rallyTimings.map((r, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                <td style={td}>{i + 1}</td>
+                <td style={{ ...td, fontWeight: 'bold' }}>{r.score}</td>
+                <td style={td}>{r.serverName}</td>
+                <td style={td}>{r.receiverName}</td>
+                <td style={{ ...td, fontFamily: 'monospace' }}>{formatTime(r.outputStart)}</td>
+                <td style={{ ...td, fontFamily: 'monospace' }}>{r.duration.toFixed(1)}s</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
