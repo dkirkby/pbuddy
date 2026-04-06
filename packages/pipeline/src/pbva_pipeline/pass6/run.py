@@ -101,6 +101,7 @@ def _build_score_overlay(
     rally: dict,
     player_names: dict,
     corner: str = "upper_right",
+    receiver_first: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Pre-compute the score/name overlay for one rally.
 
@@ -153,7 +154,9 @@ def _build_score_overlay(
     initial_sv_set = frozenset({sv_a, sv_b})
 
     current_server = rally.get("serverName", "")
-    current_receiver = rally.get("receiverName", "")
+    # receiver_first pins the receiving team's first-listed player across a
+    # service run so the order only changes at side-out boundaries.
+    current_receiver = receiver_first if receiver_first is not None else rally.get("receiverName", "")
 
     score_parts = rally.get("score", "0-0-0").split("-")
     raw_a, raw_b = score_parts[0], score_parts[1]
@@ -620,9 +623,29 @@ class Pass6:
         # so the updated score is already at full opacity.  After the last
         # rally's fade_out, a single hold frame locks in the final game score.
         # ------------------------------------------------------------------
+        # Determine a stable receiver_first for each rally: fixed at each
+        # side-out boundary (when the serving team changes) and held constant
+        # across all subsequent rallies until the next side out.  This stops
+        # the receiving team's display order flipping rally-to-rally due to
+        # diagonal-receiver changes while the same team keeps serving.
+        _initial_sv_set = frozenset({
+            player_names.get("serving_team_left", ""),
+            player_names.get("serving_team_right", ""),
+        })
+        _stable_rv_first: list[str] = []
+        _cur_rv_first = ""
+        _prev_serving_initial = None
+        for _r in rallies:
+            _serving_initial = _r["serverName"] in _initial_sv_set
+            if _serving_initial != _prev_serving_initial:
+                _cur_rv_first = _r["receiverName"]
+                _prev_serving_initial = _serving_initial
+            _stable_rv_first.append(_cur_rv_first)
+
         score_ovs = [
-            _build_score_overlay((height, width), r, player_names, overlay_corner)
-            for r in rallies
+            _build_score_overlay((height, width), r, player_names, overlay_corner,
+                                 receiver_first=_stable_rv_first[i])
+            for i, r in enumerate(rallies)
         ]
 
         # Build a synthetic rally dict whose score reflects the outcome of the
@@ -634,7 +657,8 @@ class Pass6:
             _la += 1
         _final_rally = {**_last, "score": f"{_la}-{_lb}-{_lparts[2]}"}
         final_score_ov = _build_score_overlay(
-            (height, width), _final_rally, player_names, overlay_corner
+            (height, width), _final_rally, player_names, overlay_corner,
+            receiver_first=_stable_rv_first[-1],
         )
 
         next_score_ovs = score_ovs[1:] + [final_score_ov]
