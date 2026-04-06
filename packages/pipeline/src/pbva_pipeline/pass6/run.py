@@ -192,13 +192,12 @@ def _build_score_overlay(
     # ---- Score ----
     # (top_score, bot_score already set above)
 
-    # ---- Layout (scales with frame height) ----
+    # ---- Layout (scales with frame height; 1.5× base size) ----
     scale = h / 720.0
-    row_h = max(26, round(30 * scale))
-    font_sz = max(11, round(13 * scale))
-    pad_x = max(6, round(8 * scale))
-    margin = max(8, round(10 * scale))
-    stroke_w = max(1, round(scale))
+    row_h = max(39, round(45 * scale))
+    font_sz = max(17, round(20 * scale))
+    pad_x = max(9, round(12 * scale))
+    margin = 0   # flush with video bounds
 
     font = _load_font(font_sz)
 
@@ -230,10 +229,9 @@ def _build_score_overlay(
     img = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    NAME_BG = (255, 255, 255, 160)   # semi-transparent white
+    NAME_BG = (0, 0, 0, 220)         # black
     SCORE_BG = (0, 100, 45, 225)     # dark green
     WHITE = (255, 255, 255, 255)
-    STROKE = (0, 0, 0, 110)          # thin dark halo for white-on-white legibility
 
     for row in range(2):
         y0, y1 = row * row_h, (row + 1) * row_h
@@ -245,17 +243,14 @@ def _build_score_overlay(
     draw.line([name_col_w, row_h, total_w - 1, row_h], fill=(0, 60, 25, 180), width=1)
 
     def _draw_stroked(x: int, ty: int, text: str, underline: bool = False) -> int:
-        """Draw *text* at (x, ty) with a stroke halo; return rendered width."""
+        """Draw *text* at (x, ty); return rendered width."""
         bb = draw.textbbox((x, ty), text, font=font)
         tw = bb[2] - bb[0]
         th = bb[3] - bb[1]
-        # Stroke (drawn first, slightly offset in 4 directions)
-        for dx, dy in ((-stroke_w, 0), (stroke_w, 0), (0, -stroke_w), (0, stroke_w)):
-            draw.text((x + dx, ty + dy), text, font=font, fill=STROKE)
         draw.text((x, ty), text, font=font, fill=WHITE)
         if underline:
             uy = ty + th + max(1, round(scale))
-            draw.line([x, uy, x + tw, uy], fill=WHITE, width=stroke_w)
+            draw.line([x, uy, x + tw, uy], fill=WHITE, width=max(1, round(scale)))
         return tw
 
     def _draw_score(text: str, cell_x: int, cell_w: int, y_mid: int) -> None:
@@ -465,6 +460,20 @@ def _splice_audio(
 
 
 # ---------------------------------------------------------------------------
+# Score overlay compositor
+# ---------------------------------------------------------------------------
+
+def _apply_score_ov(bgr: np.ndarray, score_ov: tuple | None) -> np.ndarray:
+    """Alpha-blend the pre-computed score overlay onto a BGR frame."""
+    if score_ov is None:
+        return bgr
+    ov_bgr, ov_alpha = score_ov
+    return (
+        bgr.astype(np.float32) * (1.0 - ov_alpha) + ov_bgr * ov_alpha
+    ).clip(0, 255).astype(np.uint8)
+
+
+# ---------------------------------------------------------------------------
 # Pass 6 implementation
 # ---------------------------------------------------------------------------
 
@@ -632,8 +641,14 @@ class Pass6:
             seek_pts = int(max(0, (start_frame - 1) / fps) / float(src_v.time_base))
             src.seek(seek_pts, stream=src_v)
 
-            first_bgr: np.ndarray | None = None
-            last_bgr: np.ndarray | None = None
+            # first_raw / last_raw hold frames *before* the score overlay so
+            # that cross-fade blending is done on clean video content.  The
+            # score overlay is composited after every blend, keeping the box
+            # at full opacity throughout fades.  The score switches at the
+            # boundary between fade_out (this rally) and fade_in (next rally),
+            # which is the midpoint of the back-to-back cross fade.
+            first_raw: np.ndarray | None = None
+            last_raw: np.ndarray | None = None
 
             for frame in src.decode(video=0):
                 # Map PyAV PTS → OpenCV frame number (per CLAUDE.md: PTS = (N+1)/fps)
@@ -648,41 +663,41 @@ class Pass6:
                 # Convert to BGR numpy array for overlay compositing.
                 bgr = frame.to_ndarray(format="bgr24")
 
-                # Extension-point overlay (ball tracking, etc.).
+                # Extension-point overlay (ball tracking, etc.) — applied
+                # before blending so it fades naturally with the video.
                 overlay = _render_overlay(
                     bgr, rally_idx, src_frame_num, out_frame_idx, rally
                 )
                 if overlay is not None:
-                    # Alpha-blend BGRA overlay onto BGR frame.
                     alpha = overlay[:, :, 3:4].astype(np.float32) / 255.0
                     bgr = (
                         bgr.astype(np.float32) * (1.0 - alpha)
                         + overlay[:, :, :3].astype(np.float32) * alpha
                     ).clip(0, 255).astype(np.uint8)
 
-                # Score/name overlay (pre-computed once per rally).
-                if score_ov is not None:
-                    ov_bgr, ov_alpha = score_ov
-                    bgr = (
-                        bgr.astype(np.float32) * (1.0 - ov_alpha) + ov_bgr * ov_alpha
-                    ).clip(0, 255).astype(np.uint8)
-
-                if first_bgr is None:
+                if first_raw is None:
                     # Emit fade_in frames: median → first rally frame.
                     # alpha goes from 1/(N+1) to N/(N+1) so neither endpoint
                     # is duplicated in the output.
-                    first_bgr = bgr
+                    first_raw = bgr
                     for fi in range(fade_frames):
                         blend = (fi + 1) / (fade_frames + 1)
                         fade_bgr = cv2.addWeighted(
-                            median_bgr, 1.0 - blend, first_bgr, blend, 0
+                            median_bgr, 1.0 - blend, first_raw, blend, 0
                         )
-                        _encode_bgr(fade_bgr, out_frame_idx, out_v, out_container)
+                        _encode_bgr(
+                            _apply_score_ov(fade_bgr, score_ov),
+                            out_frame_idx, out_v, out_container,
+                        )
                         out_frame_idx += 1
 
-                _encode_bgr(bgr, out_frame_idx, out_v, out_container)
+                # Score overlay applied after blending, at full opacity.
+                _encode_bgr(
+                    _apply_score_ov(bgr, score_ov),
+                    out_frame_idx, out_v, out_container,
+                )
                 out_frame_idx += 1
-                last_bgr = bgr
+                last_raw = bgr
                 source_frames_done += 1
 
                 now = time.monotonic()
@@ -698,13 +713,16 @@ class Pass6:
                     progress.check_cancelled()
 
             # Emit fade_out frames: last rally frame → median.
-            if last_bgr is not None:
+            if last_raw is not None:
                 for fi in range(fade_frames):
                     blend = (fi + 1) / (fade_frames + 1)
                     fade_bgr = cv2.addWeighted(
-                        last_bgr, 1.0 - blend, median_bgr, blend, 0
+                        last_raw, 1.0 - blend, median_bgr, blend, 0
                     )
-                    _encode_bgr(fade_bgr, out_frame_idx, out_v, out_container)
+                    _encode_bgr(
+                        _apply_score_ov(fade_bgr, score_ov),
+                        out_frame_idx, out_v, out_container,
+                    )
                     out_frame_idx += 1
 
         # Flush encoder.
