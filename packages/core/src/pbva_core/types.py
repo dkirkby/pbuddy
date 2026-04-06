@@ -192,8 +192,10 @@ class Pass5AcceptedOutput(BaseModel):
 class Pass6RawResult(BaseModel):
     rally_count: int
     output_duration_s: float
+    chapter_timestamps: str = ""
 
 
 class Pass6AcceptedOutput(BaseModel):
     rally_count: int
     output_duration_s: float
+    chapter_timestamps: str = ""

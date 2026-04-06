@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
@@ -30,6 +30,9 @@ export default function Pass6Page() {
     queryFn: () => api.getPass6Result(projectId!),
     retry: false,
   })
+
+  const [copied, setCopied] = useState(false)
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fps = project?.video_fps ?? 30
   const rallies: RallyRecord[] = pass2Corr?.data?.rally ?? []
@@ -149,6 +152,32 @@ export default function Pass6Page() {
             ))}
           </tbody>
         </table>
+      )}
+      {/* YouTube chapter timestamps */}
+      {pass6Result?.chapter_timestamps && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#333' }}>YouTube chapter timestamps</span>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(pass6Result.chapter_timestamps!)
+                setCopied(true)
+                if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
+                copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000)
+              }}
+              style={{ fontSize: 12, padding: '2px 10px', cursor: 'pointer' }}
+            >
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+          <pre style={{
+            fontFamily: 'monospace', fontSize: 12, background: '#f5f5f5',
+            border: '1px solid #ddd', borderRadius: 4, padding: '8px 12px',
+            margin: 0, whiteSpace: 'pre-wrap', color: '#222',
+          }}>
+            {pass6Result.chapter_timestamps}
+          </pre>
+        </div>
       )}
     </div>
   )

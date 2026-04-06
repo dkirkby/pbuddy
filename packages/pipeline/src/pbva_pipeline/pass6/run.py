@@ -44,6 +44,21 @@ from pbva_pipeline.base import PassContext
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_yt_timestamp(seconds: float) -> str:
+    """Format seconds as M:SS or H:MM:SS for YouTube chapter descriptions."""
+    total_s = int(seconds)
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+# ---------------------------------------------------------------------------
 # Overlay hook
 # ---------------------------------------------------------------------------
 
@@ -964,9 +979,14 @@ class Pass6:
         # 9. Write result
         # ------------------------------------------------------------------
         progress.update(0.98, "finalize", "Writing result…")
+        chapter_timestamps = "\n".join(
+            f"{_fmt_yt_timestamp(c['chapter_start_s'])} {c['title']}"
+            for c in chapter_info
+        )
         result = Pass6RawResult(
             rally_count=len(rallies),
             output_duration_s=round(total_duration_s, 3),
+            chapter_timestamps=chapter_timestamps,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
         progress.update(1.0, "done", f"Exported {len(rallies)} rallies ({total_duration_s:.1f}s)")
@@ -997,13 +1017,16 @@ class Pass6:
         if isinstance(raw_result, dict):
             rally_count = raw_result.get("rally_count", 0)
             output_duration_s = raw_result.get("output_duration_s", 0.0)
+            chapter_timestamps = raw_result.get("chapter_timestamps", "")
         else:
             rally_count = raw_result.rally_count
             output_duration_s = raw_result.output_duration_s
+            chapter_timestamps = raw_result.chapter_timestamps
 
         accepted = Pass6AcceptedOutput(
             rally_count=rally_count,
             output_duration_s=output_duration_s,
+            chapter_timestamps=chapter_timestamps,
         )
         (accepted_dir / "result.json").write_text(accepted.model_dump_json(indent=2))
         return accepted
