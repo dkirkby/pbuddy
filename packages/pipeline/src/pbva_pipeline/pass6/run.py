@@ -473,6 +473,21 @@ def _apply_score_ov(bgr: np.ndarray, score_ov: tuple | None) -> np.ndarray:
     ).clip(0, 255).astype(np.uint8)
 
 
+def _lerp_score_ovs(
+    ov_a: tuple | None,
+    ov_b: tuple | None,
+    t: float,
+) -> tuple | None:
+    """Linearly interpolate between two score overlays (t=0 → ov_a, t=1 → ov_b)."""
+    if ov_a is None:
+        return ov_b
+    if ov_b is None:
+        return ov_a
+    bgr_a, alpha_a = ov_a
+    bgr_b, alpha_b = ov_b
+    return bgr_a * (1.0 - t) + bgr_b * t, alpha_a * (1.0 - t) + alpha_b * t
+
+
 # ---------------------------------------------------------------------------
 # Pass 6 implementation
 # ---------------------------------------------------------------------------
@@ -551,7 +566,8 @@ class Pass6:
             cumulative_s += section_duration_s
             total_source_frames += n_frames
 
-        total_duration_s = cumulative_s
+        # Extra hold frame appended after the last rally's fade_out (see step 6).
+        total_duration_s = cumulative_s + 1.0 / fps
 
         # ------------------------------------------------------------------
         # 4. Write chapter metadata for the ffmpeg mux step
@@ -591,7 +607,40 @@ class Pass6:
             full_wav_path.unlink()
 
         # ------------------------------------------------------------------
-        # 6. PyAV encode loop: decode rally frames, composite overlay, encode
+        # 6. Pre-compute score overlays for all rallies + final game state
+        #
+        # score_ovs[i]      — overlay shown during rally i and its fade_in
+        # next_score_ovs[i] — overlay shown during rally i's fade_out:
+        #                     = score_ovs[i+1] for non-final rallies
+        #                     = final_score_ov for the last rally
+        #
+        # During fade_out the score lerps from score_ovs[i] → next_score_ovs[i]
+        # so the score change is visible as the video fades to the median.
+        # During fade_in of the next rally, next_score_ovs[i] == score_ovs[i+1]
+        # so the updated score is already at full opacity.  After the last
+        # rally's fade_out, a single hold frame locks in the final game score.
+        # ------------------------------------------------------------------
+        score_ovs = [
+            _build_score_overlay((height, width), r, player_names, overlay_corner)
+            for r in rallies
+        ]
+
+        # Build a synthetic rally dict whose score reflects the outcome of the
+        # last rally (serving team +1 if they won, unchanged on side-out).
+        _last = rallies[-1]
+        _lparts = _last["score"].split("-")
+        _la, _lb = int(_lparts[0]), int(_lparts[1])
+        if _last.get("servingTeamWinsRally"):
+            _la += 1
+        _final_rally = {**_last, "score": f"{_la}-{_lb}-{_lparts[2]}"}
+        final_score_ov = _build_score_overlay(
+            (height, width), _final_rally, player_names, overlay_corner
+        )
+
+        next_score_ovs = score_ovs[1:] + [final_score_ov]
+
+        # ------------------------------------------------------------------
+        # 7. PyAV encode loop: decode rally frames, composite overlay, encode
         #    Each rally is wrapped with fade_in / fade_out cross-fade frames.
         #
         # Progress spans 0.02 → 0.95 so the slow encode dominates the bar.
@@ -629,12 +678,9 @@ class Pass6:
                 rally_mid_s, median_images, median_window_times, width, height
             )
 
-            # Pre-compute the score overlay for this rally.  Score and server
-            # are constant across all frames in a rally, so rendering once
-            # and reusing avoids per-frame PIL overhead.
-            score_ov = _build_score_overlay(
-                (height, width), rally, player_names, overlay_corner
-            )
+            score_ov = score_ovs[rally_idx]
+            next_score_ov = next_score_ovs[rally_idx]
+            is_last_rally = rally_idx == len(rallies) - 1
 
             # Seek to just before the start of this rally.  PyAV seeks to the
             # nearest keyframe at or before the target PTS.
@@ -713,17 +759,29 @@ class Pass6:
                     progress.check_cancelled()
 
             # Emit fade_out frames: last rally frame → median.
+            # Score overlay lerps from this rally's score to the updated score
+            # (next rally's score, or final game score for the last rally).
             if last_raw is not None:
                 for fi in range(fade_frames):
                     blend = (fi + 1) / (fade_frames + 1)
                     fade_bgr = cv2.addWeighted(
                         last_raw, 1.0 - blend, median_bgr, blend, 0
                     )
+                    t = fi / (fade_frames - 1) if fade_frames > 1 else 1.0
                     _encode_bgr(
-                        _apply_score_ov(fade_bgr, score_ov),
+                        _apply_score_ov(fade_bgr, _lerp_score_ovs(score_ov, next_score_ov, t)),
                         out_frame_idx, out_v, out_container,
                     )
                     out_frame_idx += 1
+
+            # After the last rally's fade_out, add a hold frame: the final
+            # median image with the final game score at full opacity.
+            if is_last_rally:
+                _encode_bgr(
+                    _apply_score_ov(median_bgr, final_score_ov),
+                    out_frame_idx, out_v, out_container,
+                )
+                out_frame_idx += 1
 
         # Flush encoder.
         for pkt in out_v.encode():
@@ -732,7 +790,7 @@ class Pass6:
         src.close()
 
         # ------------------------------------------------------------------
-        # 7. ffmpeg mux: encoded video + spliced audio + chapter markers
+        # 8. ffmpeg mux: encoded video + spliced audio + chapter markers
         # ------------------------------------------------------------------
         progress.update(0.96, "mux", "Muxing audio and chapter markers…")
 
@@ -788,7 +846,7 @@ class Pass6:
             spliced_wav_path.unlink(missing_ok=True)
 
         # ------------------------------------------------------------------
-        # 8. Write result
+        # 9. Write result
         # ------------------------------------------------------------------
         progress.update(0.98, "finalize", "Writing result…")
         result = Pass6RawResult(
