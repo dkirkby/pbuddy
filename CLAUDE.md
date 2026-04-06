@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Passes 1–6 are implemented end-to-end (run → review → accept). Key reference documents:
 
 - `VISION.md` — requirements and accuracy targets
-- `PIPELINE.md` — the 4-pass processing pipeline with user correction workflows
+- `PIPELINE.md` — the processing pipeline with user correction workflows
 - `ARCHITECTURE.md` — detailed implementation blueprint
 
 ## Sport Dimensions
@@ -68,8 +68,8 @@ FastAPI Backend  ←→  SQLite (metadata)
 Worker Process  ←→  Filesystem (artifacts)
   ↕
 Pass 1 → Pass 2 → Pass 3 → Pass 4 → Pass 5
-                ↘
-               Pass 6
+              ↘                          ↘
+               ╰──────────────────────→ Pass 6
 ```
 
 Each pass follows the **accepted-state pattern**:
@@ -87,9 +87,9 @@ Each pass follows the **accepted-state pattern**:
 | 3 | Ball color tagging | RGB+HSV pixel samples, hue-saturation & value-saturation scatter plots |
 | 4 | Ball detection | Per-frame motion+color+silhouette candidate detections across stable range |
 | 5 | Segment building | Trajectory segments grouped from Pass 4 detections; filtered by min length (5) and min mean speed (5 px/fr); each segment carries `first_frame`, `last_frame`, `length`, `mean_speed_px_per_frame`, `detections`; user can delete segments before accepting |
-| 6 | Video export | Highlight reel: rally segments from Pass 2 concatenated via ffmpeg concat demuxer (`-c copy`), chapter markers per rally (score as title), same resolution/fps/bitrate as source; no user corrections needed |
+| 6 | Video export | Highlight reel: rally segments from Pass 2 encoded frame-accurately via PyAV with cross-fade transitions (median background), score/player-name overlay, yellow ball-trail overlay from Pass 5 segments (1 s trailing window, opacity 5%→80%, lineWidth 1→6 px), sample-accurate audio splice with fades, MP4 chapter markers, and YouTube-pasteable chapter timestamps; no user corrections needed |
 
-Pass 6 depends on `pass2/accepted/rally.json` only (not on passes 3–5). Re-running Pass 1 or Pass 2 cascades to invalidate Pass 6.
+Pass 6 requires `pass2/accepted/rally.json` and optionally reads `pass5/accepted/segments.json` for the ball-trail overlay (trail is silently skipped if absent). Re-running Pass 1 or Pass 2 cascades to invalidate Pass 6.
 
 ### Project Artifact Layout
 
@@ -139,7 +139,7 @@ POST   /api/projects/{id}/passes/{pass}/accept
 - `Pass3Page` — ball color polygon editor (SVG overlays on hue-saturation and value-saturation scatter plots)
 - `Pass4Page` — detection reviewer (video player with per-frame ball detection overlay)
 - `Pass5Page` — segment reviewer (video player with detection + segment polyline overlays)
-- `Pass6Page` — export reviewer (rally table with output timestamps, download link, accept button)
+- `Pass6Page` — export reviewer (rally table with output timestamps, download link, copyable YouTube chapter timestamps, accept button)
 
 ### Challenge Dataset
 
