@@ -151,7 +151,10 @@ async def upload_video(
             f.write(chunk)
 
     # Probe video metadata.
-    meta = _probe_video(dest)
+    try:
+        meta = _probe_video(dest, settings)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Video probe failed: {exc}")
     project.video_path = str(dest)
     project.video_duration_s = meta.get("duration_s")
     project.video_fps = meta.get("fps")
@@ -217,29 +220,38 @@ def video_metadata(project_id: str, db: Session = Depends(get_db)):
     }
 
 
-def _probe_video(path: Path) -> dict:
-    """Return basic video metadata via ffprobe."""
-    try:
-        cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
-            "-show_format", "-show_streams",
-            str(path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        data = json.loads(result.stdout)
-        video_stream = next(
-            (s for s in data.get("streams", []) if s.get("codec_type") == "video"), {}
-        )
-        duration = float(data.get("format", {}).get("duration", 0))
-        fps_str = video_stream.get("r_frame_rate", "30/1")
-        num, den = fps_str.split("/")
-        fps = float(num) / float(den)
-        return {
-            "duration_s": round(duration, 3),
-            "fps": round(fps, 3),
-            "width": int(video_stream.get("width", 0)),
-            "height": int(video_stream.get("height", 0)),
-        }
-    except Exception:
-        return {}
+def _probe_video(path: Path, settings: Settings) -> dict:
+    """Return basic video metadata via ffprobe.
+
+    Raises RuntimeError if ffprobe fails or produces no usable output.
+    """
+    ffprobe_bin = shutil.which("ffprobe")
+    if ffprobe_bin is None:
+        # Fall back to a sibling ffprobe next to the configured ffmpeg binary.
+        import os
+        ffprobe_bin = str(Path(settings.ffmpeg_bin).parent / "ffprobe")
+    cmd = [
+        ffprobe_bin, "-v", "quiet",
+        "-print_format", "json",
+        "-show_format", "-show_streams",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed (exit {result.returncode}): {result.stderr.strip()}")
+    data = json.loads(result.stdout)
+    video_stream = next(
+        (s for s in data.get("streams", []) if s.get("codec_type") == "video"), {}
+    )
+    if not video_stream:
+        raise RuntimeError("ffprobe found no video stream in the uploaded file")
+    duration = float(data.get("format", {}).get("duration", 0))
+    fps_str = video_stream.get("r_frame_rate", "30/1")
+    num, den = fps_str.split("/")
+    fps = float(num) / float(den)
+    return {
+        "duration_s": round(duration, 3),
+        "fps": round(fps, 3),
+        "width": int(video_stream.get("width", 0)),
+        "height": int(video_stream.get("height", 0)),
+    }
