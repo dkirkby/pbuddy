@@ -82,8 +82,8 @@ Each pass follows the **accepted-state pattern**:
 
 | Pass | Goal | Key outputs |
 |------|------|-------------|
-| 1 | Scene calibration | Median background plate(s), court geometry, stable time bounds |
-| 2 | Ball annotation | Per-frame ball position + radius annotations, patch images |
+| 1 | Identify Background and Court Outline | Median background plate(s), court geometry, stable time bounds |
+| 2 | Rally and Ball Annotation | Per-frame ball position + radius annotations, patch images |
 | 3 | Ball color tagging | RGB+HSV pixel samples, hue-saturation & value-saturation scatter plots |
 | 4 | Ball detection | Per-frame motion+color+silhouette candidate detections across stable range |
 | 5 | Segment building | Trajectory segments grouped from Pass 4 detections; filtered by min length (5) and min mean speed (5 px/fr); each segment carries `first_frame`, `last_frame`, `length`, `mean_speed_px_per_frame`, `detections`; user can delete segments before accepting |

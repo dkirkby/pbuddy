@@ -129,7 +129,9 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
 
     # --- Run the pass ---
     logger.info("Starting %s job=%s project=%s", job.pass_name, job.id, job.project_id)
+    _run_start = time.monotonic()
     raw_result = pass_impl.run(ctx, progress=ctx.progress)
+    _run_duration_s = time.monotonic() - _run_start
 
     # --- Write artifacts to DB ---
     artifact_dicts = pass_impl.write_raw_outputs(ctx, raw_result)
@@ -153,6 +155,7 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
         pass_row.state = PassState.waiting_for_user.value
         if art_ids:
             pass_row.latest_raw_artifact_id = art_ids[0]
+        pass_row.last_run_duration_s = round(_run_duration_s, 1)
         pass_row.updated_at = _utcnow()
 
         # Update project status.

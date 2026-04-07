@@ -40,6 +40,7 @@ class PassStatusSummary(BaseModel):
     pass_name: str
     state: str
     current_job_id: str | None = None
+    last_run_duration_s: float | None = None
     updated_at: datetime
 
 

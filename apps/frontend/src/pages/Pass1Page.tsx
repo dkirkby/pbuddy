@@ -116,7 +116,7 @@ export default function Pass1Page() {
       <button onClick={() => navigate(`/projects/${projectId}`)} style={{ marginBottom: 16 }}>
         ← Back to Project
       </button>
-      <h1>Pass 1 Review — Scene Calibration</h1>
+      <h1>Pass 1 Review — Identify Background and Court Outline</h1>
 
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
         {/* ── Left column: controls ── */}

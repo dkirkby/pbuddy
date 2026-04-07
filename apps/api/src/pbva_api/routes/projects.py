@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
 import uuid
 from datetime import datetime, timezone
+
+import av
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -35,6 +35,7 @@ def _project_to_detail(project: Project) -> ProjectDetail:
             pass_name=ps.pass_name,
             state=ps.state,
             current_job_id=ps.current_job_id,
+            last_run_duration_s=ps.last_run_duration_s,
             updated_at=ps.updated_at,
         )
         for ps in sorted(project.passes, key=lambda x: x.pass_name)
@@ -152,7 +153,7 @@ async def upload_video(
 
     # Probe video metadata.
     try:
-        meta = _probe_video(dest, settings)
+        meta = _probe_video(dest)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Video probe failed: {exc}")
     project.video_path = str(dest)
@@ -220,44 +221,27 @@ def video_metadata(project_id: str, db: Session = Depends(get_db)):
     }
 
 
-def _probe_video(path: Path, settings: Settings) -> dict:
-    """Return basic video metadata via ffprobe.
+def _probe_video(path: Path) -> dict:
+    """Return basic video metadata via PyAV.
 
-    Raises RuntimeError if ffprobe fails or produces no usable output.
+    Raises RuntimeError if the file cannot be opened or has no video stream.
     """
-    ffprobe_bin = shutil.which("ffprobe")
-    if ffprobe_bin is None:
-        # Derive ffprobe path from the resolved ffmpeg location.
-        ffmpeg_resolved = shutil.which(settings.ffmpeg_bin)
-        if ffmpeg_resolved:
-            ffprobe_bin = str(Path(ffmpeg_resolved).parent / "ffprobe")
-    if not ffprobe_bin:
-        raise RuntimeError(
-            f"ffprobe not found on PATH and could not be derived from ffmpeg_bin={settings.ffmpeg_bin!r}; "
-            "ensure ffmpeg is installed and on PATH"
-        )
-    cmd = [
-        ffprobe_bin, "-v", "quiet",
-        "-print_format", "json",
-        "-show_format", "-show_streams",
-        str(path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed (exit {result.returncode}): {result.stderr.strip()}")
-    data = json.loads(result.stdout)
-    video_stream = next(
-        (s for s in data.get("streams", []) if s.get("codec_type") == "video"), {}
-    )
-    if not video_stream:
-        raise RuntimeError("ffprobe found no video stream in the uploaded file")
-    duration = float(data.get("format", {}).get("duration", 0))
-    fps_str = video_stream.get("r_frame_rate", "30/1")
-    num, den = fps_str.split("/")
-    fps = float(num) / float(den)
+    try:
+        container = av.open(str(path))
+    except av.AVError as e:
+        raise RuntimeError(f"PyAV could not open video file: {e}") from e
+    video_stream = next((s for s in container.streams if s.type == "video"), None)
+    if video_stream is None:
+        container.close()
+        raise RuntimeError("No video stream found in the uploaded file")
+    fps = float(video_stream.average_rate)
+    duration_s = float(container.duration) / av.time_base if container.duration else 0.0
+    width = video_stream.width
+    height = video_stream.height
+    container.close()
     return {
-        "duration_s": round(duration, 3),
+        "duration_s": round(duration_s, 3),
         "fps": round(fps, 3),
-        "width": int(video_stream.get("width", 0)),
-        "height": int(video_stream.get("height", 0)),
+        "width": width,
+        "height": height,
     }

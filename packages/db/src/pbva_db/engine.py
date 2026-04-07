@@ -31,6 +31,15 @@ def get_engine(db_path: Path | str) -> Engine:
 def init_db(engine: Engine) -> None:
     """Create all tables if they don't exist (used instead of Alembic for simplicity)."""
     Base.metadata.create_all(engine)
+    # Add columns introduced after initial schema creation.
+    with engine.connect() as conn:
+        try:
+            conn.execute(__import__("sqlalchemy").text(
+                "ALTER TABLE passes ADD COLUMN last_run_duration_s REAL"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
 
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:

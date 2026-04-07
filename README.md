@@ -59,8 +59,8 @@ Then open [http://localhost:5173](http://localhost:5173) in your browser.
 Each pass follows the same pattern: run → review → accept. The next pass only starts after the previous one is accepted.
 
 1. **Create a project** and upload a match video (MP4, MOV, etc.)
-2. **Pass 1 — Scene calibration** — detects stable video bounds, builds a median background image, and fits court geometry. Review by dragging the four corner handles onto the court corners; accept to lock in calibration.
-3. **Pass 2 — Ball annotation** — scrub the video and click to mark ball positions frame by frame (center + radius). Also enter the four player names (serving team left/right and receiving team left/right), then mark each rally's start frame, stop frame, opening score, server, and receiver. Accept to save the full annotated dataset.
+2. **Pass 1 — Identify Background and Court Outline** — detects stable video bounds, builds a median background image, and fits court geometry. Review by dragging the four corner handles onto the court corners; accept to lock in calibration.
+3. **Pass 2 — Rally and Ball Annotation** — scrub the video and click to mark ball positions frame by frame (center + radius). Also enter the four player names (serving team left/right and receiving team left/right), then mark each rally's start frame, stop frame, opening score, server, and receiver. Accept to save the full annotated dataset.
 4. **Pass 3 — Color tagging** — samples RGB+HSV values from annotated ball pixels and generates hue-saturation and value-saturation scatter plots. Draw polygons on each plot to define the ball color region; accept to lock in the color model.
 5. **Pass 4 — Ball detection** — scans every stable frame using motion, color, and court-silhouette masks to find ball candidates. Review the detection overlay on the video; accept to pass detections downstream.
 6. **Pass 5 — Segment building** — groups Pass 4 detections into trajectory segments. Review segment polylines overlaid on the video; delete false-positive segments; accept to finalize.
@@ -79,7 +79,7 @@ All artifacts live under `data/projects/<project_id>/passes/pass{1-6}/`. Each pa
 | `accepted/result.json` | Same as raw result plus user-corrected court corner coordinates |
 | `accepted/tent_mask.png` | Binary mask (white = inside court volume silhouette) used by Pass 4 |
 
-### Pass 2 — Ball Annotation
+### Pass 2 — Rally and Ball Annotation
 
 | File | Description |
 |------|-------------|

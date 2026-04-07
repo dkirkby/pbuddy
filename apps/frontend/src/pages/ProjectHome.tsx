@@ -162,7 +162,7 @@ export default function ProjectHome() {
 
       {/* Pass 1 card */}
       <PassCard
-        title="Pass 1 — Scene Calibration"
+        title="Pass 1 — Identify Background and Court Outline"
         description="Detects stable video bounds and generates a median background image for court alignment."
         pass={pass1}
         prereqMet={true}
@@ -176,7 +176,7 @@ export default function ProjectHome() {
 
       {/* Pass 2 card */}
       <PassCard
-        title="Pass 2 — Ball Annotation"
+        title="Pass 2 — Rally and Ball Annotation"
         description="Manually mark ball positions frame by frame to build annotation data."
         pass={pass2}
         prereqMet={pass1?.state === 'accepted'}
@@ -264,10 +264,16 @@ export default function ProjectHome() {
 const IN_FLIGHT = new Set(['queued', 'running'])
 const RUNNABLE  = new Set(['not_started', 'failed', 'cancelled'])
 
+function fmtDuration(s: number): string {
+  const m = Math.floor(s / 60)
+  const sec = Math.floor(s % 60)
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+}
+
 interface PassCardProps {
   title: string
   description: string
-  pass: { state: string } | undefined
+  pass: { state: string; last_run_duration_s?: number | null } | undefined
   prereqMet: boolean
   prereqLabel: string
   progress: { stage: string; fraction: number } | null
@@ -303,9 +309,16 @@ function PassCard({
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
-        <span style={{ color: STATE_COLOR[state] ?? '#aaa', fontWeight: 'bold' }}>
-          {STATE_LABELS[state] ?? state}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+          <span style={{ color: STATE_COLOR[state] ?? '#aaa', fontWeight: 'bold' }}>
+            {STATE_LABELS[state] ?? state}
+          </span>
+          {pass?.last_run_duration_s != null && (
+            <span style={{ fontSize: 12, color: '#888' }}>
+              last run: {fmtDuration(pass.last_run_duration_s)}
+            </span>
+          )}
+        </div>
       </div>
       <p style={{ color: '#555', fontSize: 14 }}>{description}</p>
 
