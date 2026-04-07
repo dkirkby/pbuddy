@@ -27,6 +27,15 @@
           ]
         }
       },
+      "accepted_artifacts": {
+        "tent_mask.png": {
+          "description": "Binary mask (white = inside court volume silhouette, black = outside) derived by projecting the 3D court geometry onto the background plate; used by Pass 3 to restrict background colour sampling and by Pass 4 as a detection mask",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
+            { "type": "setting", "pass": "pass1", "name": "court_corners" }
+          ]
+        }
+      },
       "settings": {
         "court_corners": {
           "description": "Pixel coordinates of the four court corners in background plate space; user drags handles in the SVG overlay editor; defaults are computed by the calibration algorithm",
@@ -48,6 +57,36 @@
           "depends_on": [
             { "type": "source_video" },
             { "type": "artifact", "pass": "pass1", "file": "result.json" }
+          ]
+        }
+      },
+      "accepted_artifacts": {
+        "annotations.json": {
+          "description": "Per-frame ball annotations submitted by the user: { \"annotations\": { \"<browser_frame_number>\": { x, y, radius } } }",
+          "depends_on": [
+            { "type": "setting", "pass": "pass2", "name": "ball_annotations" }
+          ]
+        },
+        "rally.json": {
+          "description": "Rally records and player names submitted by the user: { \"rally\": [...], \"player_names\": {...} }",
+          "depends_on": [
+            { "type": "setting", "pass": "pass2", "name": "rally_records" },
+            { "type": "setting", "pass": "pass2", "name": "player_names" }
+          ]
+        },
+        "patches/raw/NNNNNN.png": {
+          "description": "64×64 px crop of the source video frame centred on the annotated ball; filename is the browser frame number zero-padded to 6 digits; uploaded from the browser during annotation",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "setting", "pass": "pass2", "name": "ball_annotations" }
+          ]
+        },
+        "patches/bg_sub/NNNNNN.png": {
+          "description": "Background-subtracted version of the corresponding raw patch (cv2.absdiff of raw patch and the matching crop from the median background plate); missing if the median background image is unavailable",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass2", "file": "patches/raw/NNNNNN.png" },
+            { "type": "artifact", "pass": "pass1", "file": "result.json" },
+            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" }
           ]
         }
       },
