@@ -80,7 +80,7 @@ def test_create_artifact_row(session):
         pass_name="pass1",
         artifact_role="raw",
         artifact_type="png",
-        path="/tmp/test/median_background.png",
+        path="/tmp/test/median_background_0.png",
     )
     session.add(art)
     session.commit()

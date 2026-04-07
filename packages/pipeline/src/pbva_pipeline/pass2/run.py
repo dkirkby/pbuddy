@@ -22,7 +22,14 @@ class Pass2:
             raise FileNotFoundError(f"Video not found: {ctx.video_path}")
         if not ctx.prior_accepted:
             raise ValueError("Pass 1 accepted output is required for Pass 2")
-        bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
+        p1_raw_result = ctx.paths.project_root / "passes" / "pass1" / "raw" / "result.json"
+        if not p1_raw_result.exists():
+            raise FileNotFoundError("Pass 1 raw result.json not found")
+        p1_data = json.loads(p1_raw_result.read_text())
+        median_paths = p1_data.get("median_background_paths", [])
+        if not median_paths:
+            raise FileNotFoundError("No median background images listed in Pass 1 result.json")
+        bg_path = ctx.paths.project_root / median_paths[0]
         if not bg_path.exists():
             raise FileNotFoundError(f"Median background not found: {bg_path}")
 
@@ -86,8 +93,14 @@ class Pass2:
             raw_dst.mkdir(parents=True, exist_ok=True)
             bg_sub_dst.mkdir(parents=True, exist_ok=True)
 
-            bg_plate_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background.png"
-            bg_plate = cv2.imread(str(bg_plate_path)) if bg_plate_path.exists() else None
+            p1_raw_result = ctx.paths.project_root / "passes" / "pass1" / "raw" / "result.json"
+            bg_plate = None
+            if p1_raw_result.exists():
+                p1_data = json.loads(p1_raw_result.read_text())
+                median_paths = p1_data.get("median_background_paths", [])
+                if median_paths:
+                    bg_plate_path = ctx.paths.project_root / median_paths[0]
+                    bg_plate = cv2.imread(str(bg_plate_path))
 
             for src_png in sorted(raw_src.glob("*.png")):
                 shutil.copy2(src_png, raw_dst / src_png.name)

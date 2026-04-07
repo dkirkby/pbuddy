@@ -88,14 +88,16 @@ def test_pass1_smoke(tmp_path):
     )
     print(f"\nStable bounds: {result.stable_bounds.in_time_s:.1f}s – {result.stable_bounds.out_time_s:.1f}s")
 
-    # 2. Median background image exists and has correct shape.
-    bg_path = pass_paths.pass_raw_dir / "median_background.png"
-    assert bg_path.exists(), "median_background.png not written"
+    # 2. Median background image(s) exist and have correct shape.
     import cv2
-    bg = cv2.imread(str(bg_path))
-    assert bg is not None, "Could not read median_background.png"
-    assert bg.shape == (540, 960, 3), f"Expected (540, 960, 3), got {bg.shape}"
-    print(f"Background plate: {bg.shape}, written to {bg_path}")
+    assert result.median_background_paths, "No median_background_paths in result"
+    for rel_path in result.median_background_paths:
+        bg_path = pass_paths.project_root / rel_path
+        assert bg_path.exists(), f"{rel_path} not written"
+        bg = cv2.imread(str(bg_path))
+        assert bg is not None, f"Could not read {rel_path}"
+        assert bg.shape == (540, 960, 3), f"Expected (540, 960, 3), got {bg.shape}"
+        print(f"Background plate: {bg.shape}, written to {bg_path}")
 
     # 3. Court overlay exists.
     overlay_path = pass_paths.pass_raw_dir / "court_overlay.png"

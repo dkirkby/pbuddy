@@ -203,6 +203,8 @@ def main() -> None:
         sys.exit(0)
 
     # Load median background plate.
+    # FIXME: Pass 1 writes median_background_0.png (indexed), not median_background.png.
+    # This path should be read from pass1/raw/result.json (median_background_paths[0]).
     bg_path = root_path / "passes" / "pass1" / "raw" / "median_background.png"
     if not bg_path.exists():
         print(f"Error: median background not found at {bg_path}", file=sys.stderr)
