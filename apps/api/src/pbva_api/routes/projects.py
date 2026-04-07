@@ -227,9 +227,15 @@ def _probe_video(path: Path, settings: Settings) -> dict:
     """
     ffprobe_bin = shutil.which("ffprobe")
     if ffprobe_bin is None:
-        # Fall back to a sibling ffprobe next to the configured ffmpeg binary.
-        import os
-        ffprobe_bin = str(Path(settings.ffmpeg_bin).parent / "ffprobe")
+        # Derive ffprobe path from the resolved ffmpeg location.
+        ffmpeg_resolved = shutil.which(settings.ffmpeg_bin)
+        if ffmpeg_resolved:
+            ffprobe_bin = str(Path(ffmpeg_resolved).parent / "ffprobe")
+    if not ffprobe_bin:
+        raise RuntimeError(
+            f"ffprobe not found on PATH and could not be derived from ffmpeg_bin={settings.ffmpeg_bin!r}; "
+            "ensure ffmpeg is installed and on PATH"
+        )
     cmd = [
         ffprobe_bin, "-v", "quiet",
         "-print_format", "json",
