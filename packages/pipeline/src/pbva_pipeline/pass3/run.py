@@ -182,7 +182,14 @@ class Pass3:
     def _write_bg_colors(self, ctx: PassContext) -> int:
         """Sample all tent-masked pixels from the median background plate into bg_colors.csv."""
         pass1_dir = ctx.paths.project_root / "passes" / "pass1"
-        bg_path = pass1_dir / "raw" / "median_background.png"
+        p1_result_path = pass1_dir / "raw" / "result.json"
+        if not p1_result_path.exists():
+            return 0
+        p1_result = json.loads(p1_result_path.read_text())
+        median_paths = p1_result.get("median_background_paths", [])
+        if not median_paths:
+            return 0
+        bg_path = ctx.paths.project_root / median_paths[0]
         mask_path = pass1_dir / "accepted" / "tent_mask.png"
 
         bgr = cv2.imread(str(bg_path))

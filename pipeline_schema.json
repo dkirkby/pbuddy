@@ -94,8 +94,9 @@
           ]
         },
         "bg_colors.csv": {
-          "description": "R, G, B, H, S, V channel values sampled from pixels in the median background image that fall within the court silhouette (tent) mask",
+          "description": "R, G, B, H, S, V channel values sampled from pixels in the first median background image that fall within the court silhouette (tent) mask; the background image path is read from pass1/raw/result.json (median_background_paths[0])",
           "depends_on": [
+            { "type": "artifact", "pass": "pass1", "file": "result.json" },
             { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
             { "type": "setting", "pass": "pass1", "name": "court_corners" }
           ]
