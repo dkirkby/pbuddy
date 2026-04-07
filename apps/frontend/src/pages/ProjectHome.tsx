@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useProjectWebSocket } from '../api/ws'
 
@@ -97,6 +97,12 @@ export default function ProjectHome() {
     },
   })
 
+  const reuploadRef = useRef<HTMLInputElement>(null)
+  const reupload = useMutation({
+    mutationFn: (file: File) => api.uploadVideo(projectId!, file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
+  })
+
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
@@ -116,6 +122,36 @@ export default function ProjectHome() {
           <span> · {Math.round(project.video_duration_s / 60)} min · {project.video_width}×{project.video_height}</span>
         )}
       </div>
+      {!project.video_duration_s && (
+        <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fff8e1', border: '1px solid #f0c000', borderRadius: 6 }}>
+          <span style={{ fontSize: 13, color: '#7a5c00', marginRight: 12 }}>
+            No video metadata — upload failed or video was never attached.
+          </span>
+          <input
+            ref={reuploadRef}
+            type="file"
+            accept="video/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) reupload.mutate(file)
+              e.target.value = ''
+            }}
+          />
+          <button
+            onClick={() => reuploadRef.current?.click()}
+            disabled={reupload.isPending}
+            style={{ fontSize: 13, padding: '3px 12px', cursor: 'pointer' }}
+          >
+            {reupload.isPending ? 'Uploading…' : 'Upload video'}
+          </button>
+          {reupload.isError && (
+            <span style={{ fontSize: 12, color: '#c00', marginLeft: 10 }}>
+              {(reupload.error as any)?.message ?? 'Upload failed'}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Pass cards — shared logic:
             queued / running  → progress bar only (job in flight)
