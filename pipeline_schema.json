@@ -1,0 +1,225 @@
+{
+  "description": "Authoritative schema for the PBuddy 6-pass pipeline. Lists the raw artifacts produced by each pass, the settings the user can adjust in each pass's web view, and the dependency graph describing which upstream raw artifacts and settings are inputs to each raw artifact.",
+  "conventions": {
+    "artifact_path": "All artifact paths are relative to data/projects/<project_id>/passes/pass{N}/raw/",
+    "frame_numbers": "Frame numbers stored in artifacts use OpenCV 0-based indexing unless noted as browser frame numbers (OpenCV + 1)",
+    "dependency_types": {
+      "source_video": "The original uploaded video file at uploads/original.mp4",
+      "artifact": "A raw artifact produced by an earlier pass; fields: pass, file",
+      "setting": "A user-editable value from an earlier pass's web view; fields: pass, name"
+    }
+  },
+  "passes": {
+    "pass1": {
+      "name": "Scene Calibration",
+      "raw_artifacts": {
+        "result.json": {
+          "description": "Stable in/out frame bounds (in_frame, out_frame), video FPS, frame dimensions (bg_width, bg_height), relative paths to median background images, and per-window time ranges (median_window_times)",
+          "depends_on": [
+            { "type": "source_video" }
+          ]
+        },
+        "median_background_N.png": {
+          "description": "Median background image for stable window N (N = 0, 1, …); pixel-wise median of sampled frames; used as background plate for motion detection, background subtraction, and cross-fade transitions",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "artifact", "pass": "pass1", "file": "result.json" }
+          ]
+        }
+      },
+      "settings": {
+        "court_corners": {
+          "description": "Pixel coordinates of the four court corners in background plate space; user drags handles in the SVG overlay editor; defaults are computed by the calibration algorithm",
+          "type": "object",
+          "schema": {
+            "top_left":     { "x": "number", "y": "number" },
+            "top_right":    { "x": "number", "y": "number" },
+            "bottom_left":  { "x": "number", "y": "number" },
+            "bottom_right": { "x": "number", "y": "number" }
+          }
+        }
+      }
+    },
+    "pass2": {
+      "name": "Ball Annotation",
+      "raw_artifacts": {
+        "result.json": {
+          "description": "Video FPS and frame dimensions (bg_width, bg_height); metadata needed to drive the annotation UI",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "artifact", "pass": "pass1", "file": "result.json" }
+          ]
+        }
+      },
+      "settings": {
+        "ball_annotations": {
+          "description": "Per-frame ball position and radius; keys are browser frame numbers (OpenCV frame index + 1); user clicks the video frame to place each annotation",
+          "type": "object",
+          "schema": {
+            "<browser_frame_number>": { "x": "number", "y": "number", "radius": "number" }
+          }
+        },
+        "rally_records": {
+          "description": "Ordered list of rallies; each entry records the frame range, opening score string (e.g. '7-5-2'), which player is serving, which is receiving, and whether the serving team wins the rally",
+          "type": "array",
+          "item_schema": {
+            "start_frame": "number (browser frame number)",
+            "stop_frame":  "number (browser frame number)",
+            "score":       "string  (e.g. '7-5-2': serving_score-receiving_score-server_number)",
+            "serverName":  "string",
+            "receiverName": "string",
+            "servingTeamWinsRally": "boolean"
+          }
+        },
+        "player_names": {
+          "description": "Four player names establishing initial team membership and court positions at the start of the game; used to build the score overlay in Pass 6",
+          "type": "object",
+          "schema": {
+            "serving_team_left":    "string",
+            "serving_team_right":   "string",
+            "receiving_team_right": "string",
+            "receiving_team_left":  "string"
+          }
+        }
+      }
+    },
+    "pass3": {
+      "name": "Ball Color Tagging",
+      "raw_artifacts": {
+        "ball_colors.csv": {
+          "description": "R, G, B, H, S, V channel values sampled from pixels within the annotated ball patches; one row per sampled pixel across all annotated frames",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "setting", "pass": "pass2", "name": "ball_annotations" }
+          ]
+        },
+        "bg_colors.csv": {
+          "description": "R, G, B, H, S, V channel values sampled from pixels in the median background image that fall within the court silhouette (tent) mask",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
+            { "type": "setting", "pass": "pass1", "name": "court_corners" }
+          ]
+        },
+        "hue_saturation.png": {
+          "description": "Hue vs Saturation scatter plot; ball pixels rendered in their true RGB colour, background pixels in grey; user draws the ball colour polygon on this image",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
+            { "type": "artifact", "pass": "pass3", "file": "bg_colors.csv" }
+          ]
+        },
+        "hue_saturation.json": {
+          "description": "Pixel dimensions and H/S axis value ranges for the hue-saturation scatter plot; used to convert user polygon coordinates to colour-space values",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass3", "file": "hue_saturation.png" }
+          ]
+        },
+        "value_saturation.png": {
+          "description": "Value vs Saturation scatter plot; same colour scheme as the hue-saturation plot; user draws the second ball colour polygon on this image",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
+            { "type": "artifact", "pass": "pass3", "file": "bg_colors.csv" }
+          ]
+        },
+        "value_saturation.json": {
+          "description": "Pixel dimensions and V/S axis value ranges for the value-saturation scatter plot",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass3", "file": "value_saturation.png" }
+          ]
+        }
+      },
+      "settings": {
+        "color_polygons": {
+          "description": "Two closed polygons drawn by the user on the scatter plots; pixels whose (H, S) falls inside the hue-saturation polygon AND whose (V, S) falls inside the value-saturation polygon are classified as ball candidates in Pass 4",
+          "type": "object",
+          "schema": {
+            "hue_saturation":   "Array<[x, y]> (pixel coordinates in hue_saturation.png image space)",
+            "value_saturation": "Array<[x, y]> (pixel coordinates in value_saturation.png image space)"
+          }
+        }
+      }
+    },
+    "pass4": {
+      "name": "Ball Detection",
+      "raw_artifacts": {
+        "detections.json": {
+          "description": "Per-frame candidate ball detections restricted to frames inside recorded rally bounds; each detection records frame (OpenCV index), cx, cy, radius, area, and perimeter; also records stable frame range, total in-rally frame count, and max observed ball radius",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "artifact", "pass": "pass1", "file": "result.json" },
+            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
+            { "type": "setting", "pass": "pass1", "name": "court_corners" },
+            { "type": "setting", "pass": "pass2", "name": "rally_records" },
+            { "type": "setting", "pass": "pass2", "name": "ball_annotations" },
+            { "type": "setting", "pass": "pass3", "name": "color_polygons" }
+          ]
+        },
+        "detections_map.png": {
+          "description": "Binary image at background plate resolution; white pixel at every detection centre; useful for inspecting the spatial distribution of all detections across the full video",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass4", "file": "detections.json" }
+          ]
+        },
+        "patches/NNNNNN.png": {
+          "description": "64×64 px composite diagnostic patch for each annotated frame; R channel = motion mask, G = hue-saturation colour mask, B = value-saturation colour mask; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
+            { "type": "setting", "pass": "pass2", "name": "ball_annotations" },
+            { "type": "setting", "pass": "pass3", "name": "color_polygons" }
+          ]
+        }
+      },
+      "settings": {}
+    },
+    "pass5": {
+      "name": "Segment Building",
+      "raw_artifacts": {
+        "segments.json": {
+          "description": "Trajectory segments built by linking Pass 4 detections across small gaps; each segment records id, first_frame, last_frame, detection count (length), mean_speed_px_per_frame, and the list of per-frame detections (frame, cx, cy, radius); also records algorithm parameters: max_gap_frames, large_gate_px, small_gate_px, min_segment_length, min_mean_speed_px_per_frame",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass4", "file": "detections.json" }
+          ]
+        }
+      },
+      "settings": {
+        "deleted_segment_ids": {
+          "description": "Integer IDs of segments the user has marked for removal as false positives; removed from the accepted segments.json before Pass 6 reads it",
+          "type": "array",
+          "item_type": "integer"
+        }
+      }
+    },
+    "pass6": {
+      "name": "Video Export",
+      "raw_artifacts": {
+        "export.mp4": {
+          "description": "Highlight reel MP4 (H.264 CRF 18, slow preset, yuv420p); contains all rallies in order, each bracketed by cross-fade transitions to/from the nearest median background; score/player-name overlay is composited at full opacity throughout and transitions smoothly at rally boundaries; yellow ball-trail overlay shows Pass 5 segment detections in a 1-second trailing window (opacity 5%–80%, lineWidth 1–6 px); audio is spliced sample-accurately with per-rally fade-in/out (AAC 192k); MP4 chapter markers correspond to rally start times",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "artifact", "pass": "pass1", "file": "result.json" },
+            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
+            { "type": "artifact", "pass": "pass5", "file": "segments.json" },
+            { "type": "setting", "pass": "pass2", "name": "rally_records" },
+            { "type": "setting", "pass": "pass2", "name": "player_names" },
+            { "type": "setting", "pass": "pass5", "name": "deleted_segment_ids" }
+          ]
+        },
+        "result.json": {
+          "description": "Rally count, total output duration in seconds, and a YouTube-pasteable chapter timestamp string (e.g. '0:00 0-0-2\\n0:45 1-0-1\\n…')",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "setting", "pass": "pass2", "name": "rally_records" }
+          ]
+        },
+        "chapters.ffmeta": {
+          "description": "FFMETADATA1-format chapter definition file consumed by ffmpeg during the final audio/chapter mux step; chapter titles are rally score strings; timings are derived from rally frame counts divided by source FPS",
+          "depends_on": [
+            { "type": "source_video" },
+            { "type": "setting", "pass": "pass2", "name": "rally_records" }
+          ]
+        }
+      },
+      "settings": {}
+    }
+  }
+}
