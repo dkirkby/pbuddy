@@ -49,6 +49,7 @@ class Pass(Base):
     latest_correction_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     latest_accepted_artifact_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_run_duration_s: Mapped[float | None] = mapped_column(nullable=True)
+    is_dirty: Mapped[bool] = mapped_column(default=False)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
 
     project: Mapped[Project] = relationship(back_populates="passes")

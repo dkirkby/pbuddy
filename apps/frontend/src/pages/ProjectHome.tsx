@@ -24,6 +24,8 @@ const STATE_COLOR: Record<string, string> = {
   cancelled: '#aaa',
 }
 
+const DIRTY_COLOR = '#f90'
+
 export default function ProjectHome() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -180,12 +182,14 @@ export default function ProjectHome() {
         description="Manually mark ball positions frame by frame to build annotation data."
         pass={pass2}
         prereqMet={pass1?.state === 'accepted'}
-        prereqLabel="Complete Pass 1 first."
+        prereqLabel="Accept Pass 1 first."
         progress={progress?.passName === 'pass2' ? progress : null}
         onRun={() => runPass2.mutate()}
         isPending={runPass2.isPending}
         reviewPath={`/projects/${projectId}/pass2`}
-        reviewLabel="Annotate →"
+        reviewLabel="Review →"
+        hideRerun
+        alwaysReviewable
       />
 
       {/* Pass 3 card */}
@@ -193,8 +197,8 @@ export default function ProjectHome() {
         title="Pass 3 — Ball Color Tagging"
         description="Samples per-pixel color data from annotated ball patches to build a ball color profile."
         pass={pass3}
-        prereqMet={pass2?.state === 'accepted'}
-        prereqLabel="Complete Pass 2 first."
+        prereqMet={!!pass2}
+        prereqLabel="Run Pass 2 first."
         progress={progress?.passName === 'pass3' ? progress : null}
         onRun={() => runPass3.mutate()}
         isPending={runPass3.isPending}
@@ -207,8 +211,8 @@ export default function ProjectHome() {
         title="Pass 4 — Ball Detection"
         description="Detects ball candidates in each frame using motion, color, and silhouette masks."
         pass={pass4}
-        prereqMet={pass3?.state === 'accepted'}
-        prereqLabel="Complete Pass 3 first."
+        prereqMet={!!pass3}
+        prereqLabel="Run Pass 3 first."
         progress={progress?.passName === 'pass4' ? progress : null}
         onRun={() => runPass4.mutate()}
         isPending={runPass4.isPending}
@@ -233,8 +237,8 @@ export default function ProjectHome() {
         title="Pass 5 — Segment Building"
         description="Groups ball detections in consecutive frames into trajectory segments."
         pass={pass5}
-        prereqMet={pass4?.state === 'accepted'}
-        prereqLabel="Complete Pass 4 first."
+        prereqMet={!!pass4}
+        prereqLabel="Run Pass 4 first."
         progress={progress?.passName === 'pass5' ? progress : null}
         onRun={() => runPass5.mutate()}
         isPending={runPass5.isPending}
@@ -247,8 +251,8 @@ export default function ProjectHome() {
         title="Pass 6 — Video Export"
         description="Concatenates rally segments into a highlight reel with chapter markers, preserving source quality."
         pass={pass6}
-        prereqMet={pass2?.state === 'accepted'}
-        prereqLabel="Complete Pass 2 first."
+        prereqMet={!!pass2}
+        prereqLabel="Run Pass 2 first."
         progress={progress?.passName === 'pass6' ? progress : null}
         onRun={() => runPass6.mutate()}
         isPending={runPass6.isPending}
@@ -273,7 +277,7 @@ function fmtDuration(s: number): string {
 interface PassCardProps {
   title: string
   description: string
-  pass: { state: string; last_run_duration_s?: number | null } | undefined
+  pass: { state: string; is_dirty?: boolean; runnable?: boolean; last_run_duration_s?: number | null } | undefined
   prereqMet: boolean
   prereqLabel: string
   progress: { stage: string; fraction: number } | null
@@ -281,22 +285,35 @@ interface PassCardProps {
   isPending: boolean
   reviewPath: string
   reviewLabel: string
+  /** If true, the Re-Run button is never shown (pass has no run step worth repeating). */
+  hideRerun?: boolean
+  /** If true, the Review button is shown even when the pass has no results yet. */
+  alwaysReviewable?: boolean
   extraControls?: React.ReactNode
 }
 
 function PassCard({
   title, description, pass, prereqMet, prereqLabel,
-  progress, onRun, isPending, reviewPath, reviewLabel, extraControls,
+  progress, onRun, isPending, reviewPath, reviewLabel,
+  hideRerun, alwaysReviewable, extraControls,
 }: PassCardProps) {
   const navigate = useNavigate()
   const state = pass?.state ?? 'not_started'
+  const isDirty = pass?.is_dirty ?? false
+  const isRunnable = pass?.runnable ?? true
   const inFlight = IN_FLIGHT.has(state)
+  const hasResults = !RUNNABLE.has(state) && !inFlight
 
   const rerunBtn = (
     <button
       onClick={onRun}
       disabled={isPending}
-      style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, color: '#888', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+      style={{
+        padding: '6px 16px', cursor: 'pointer', fontSize: 12, borderRadius: 4,
+        color: isDirty ? '#7a5c00' : '#888',
+        border: isDirty ? '1px solid #f0c000' : '1px solid #ccc',
+        background: isDirty ? '#fff8e1' : '#fff',
+      }}
     >
       {isPending ? 'Queuing…' : 'Re-run'}
     </button>
@@ -305,14 +322,21 @@ function PassCard({
   return (
     <div style={{
       border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16,
-      opacity: prereqMet ? 1 : 0.4,
+      borderLeft: isDirty ? `4px solid ${DIRTY_COLOR}` : undefined,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-          <span style={{ color: STATE_COLOR[state] ?? '#aaa', fontWeight: 'bold' }}>
-            {STATE_LABELS[state] ?? state}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {isDirty && !inFlight && (
+              <span style={{ fontSize: 11, fontWeight: 'bold', color: '#7a5c00', background: '#fff3cd', border: '1px solid #f0c000', borderRadius: 4, padding: '1px 6px' }}>
+                Stale
+              </span>
+            )}
+            <span style={{ color: STATE_COLOR[state] ?? '#aaa', fontWeight: 'bold' }}>
+              {STATE_LABELS[state] ?? state}
+            </span>
+          </div>
           {pass?.last_run_duration_s != null && (
             <span style={{ fontSize: 12, color: '#888' }}>
               last run: {fmtDuration(pass.last_run_duration_s)}
@@ -321,6 +345,11 @@ function PassCard({
         </div>
       </div>
       <p style={{ color: '#555', fontSize: 14 }}>{description}</p>
+
+      {/* Soft prereq warning — shown inline when pass has no results yet */}
+      {!prereqMet && !hasResults && (
+        <p style={{ fontSize: 13, color: '#888', margin: '0 0 8px' }}>{prereqLabel}</p>
+      )}
 
       {/* Progress bar — shown while job is in flight */}
       {inFlight && progress && (
@@ -339,17 +368,18 @@ function PassCard({
       )}
 
       <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-        {!inFlight && prereqMet && RUNNABLE.has(state) && (
+        {!inFlight && RUNNABLE.has(state) && (
           <button
             onClick={onRun}
-            disabled={isPending}
-            style={{ padding: '6px 16px', cursor: 'pointer' }}
+            disabled={isPending || !isRunnable}
+            title={!isRunnable ? 'Required inputs from upstream passes are not ready' : undefined}
+            style={{ padding: '6px 16px', cursor: isRunnable ? 'pointer' : 'not-allowed', opacity: isRunnable ? 1 : 0.5 }}
           >
             {isPending ? 'Queuing…' : state === 'not_started' ? `Run ${title.split('—')[0].trim()}` : 'Re-run'}
           </button>
         )}
-        {/* Review button: always shown when waiting_for_user, or while paused (partial results available) */}
-        {((!inFlight && state === 'waiting_for_user') || progress?.stage === 'paused') && (
+        {/* Review button: shown when results are available, always-reviewable, or paused */}
+        {((!inFlight && (hasResults || (alwaysReviewable && prereqMet))) || progress?.stage === 'paused') && (
           <button
             onClick={() => navigate(reviewPath)}
             style={{ padding: '6px 16px', cursor: 'pointer', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4 }}
@@ -357,13 +387,10 @@ function PassCard({
             {reviewLabel}
           </button>
         )}
-        {!inFlight && state === 'accepted' && (
+        {!inFlight && state === 'accepted' && !isDirty && (
           <span style={{ color: '#090' }}>✓ Accepted</span>
         )}
-        {!inFlight && prereqMet && (state === 'waiting_for_user' || state === 'accepted') && rerunBtn}
-        {!prereqMet && (
-          <span style={{ color: '#aaa', fontSize: 14 }}>{prereqLabel}</span>
-        )}
+        {!hideRerun && !inFlight && (state === 'waiting_for_user' || state === 'accepted') && rerunBtn}
       </div>
     </div>
   )

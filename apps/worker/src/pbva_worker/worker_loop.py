@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # Registry of pass implementations keyed by pass_name.
 _PASS_REGISTRY: dict = {}
 
+# Passes whose accept step is a trivial file copy with no user corrections,
+# so they are auto-accepted immediately after their run completes.
+_AUTO_ACCEPT_PASSES = {"pass4", "pass6"}
+
 
 def _get_pass(pass_name: str):
     if pass_name not in _PASS_REGISTRY:
@@ -51,14 +55,6 @@ def _get_pass(pass_name: str):
     return _PASS_REGISTRY[pass_name]
 
 
-_PASS_WAITING_STATUS = {
-    "pass1": ProjectStatus.pass1_waiting_for_review,
-    "pass2": ProjectStatus.pass2_waiting_for_review,
-    "pass3": ProjectStatus.pass3_waiting_for_review,
-    "pass4": ProjectStatus.pass4_waiting_for_review,
-    "pass5": ProjectStatus.pass5_waiting_for_review,
-    "pass6": ProjectStatus.pass6_waiting_for_review,
-}
 
 
 def _utcnow():
@@ -152,7 +148,6 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
             .where(Pass.project_id == job.project_id)
             .where(Pass.pass_name == job.pass_name)
         ).scalar_one()
-        pass_row.state = PassState.waiting_for_user.value
         if art_ids:
             pass_row.latest_raw_artifact_id = art_ids[0]
         pass_row.last_run_duration_s = round(_run_duration_s, 1)
@@ -160,20 +155,48 @@ def execute_job(job: Job, settings: Settings, session_factory) -> None:
 
         # Update project status.
         project = session.get(Project, job.project_id)
-        waiting_status = _PASS_WAITING_STATUS.get(job.pass_name)
-        if waiting_status is not None:
-            project.status = waiting_status.value
-            project.updated_at = _utcnow()
+        project.status = ProjectStatus.in_progress.value
+        project.updated_at = _utcnow()
 
         # Mark job succeeded.
         job_row = session.get(Job, job.id)
         job_row.status = "succeeded"
         job_row.finished_at = _utcnow()
 
-        _write_event(session, job.project_id, job.id, "pass_waiting_for_user", {
-            "pass_name": job.pass_name,
-            "median_bg_artifact_id": median_bg_artifact_id,
-        })
+        if job.pass_name in _AUTO_ACCEPT_PASSES:
+            # These passes have no user corrections — auto-accept immediately by
+            # running build_accepted_output (a trivial file copy) right now.
+            accepted_artifacts = pass_impl.build_accepted_output(ctx, raw_result, None)
+            acc_art_id = str(uuid.uuid4())
+            accepted_dir = ctx.paths.pass_accepted_dir
+            # Determine the primary accepted artifact path by convention.
+            if job.pass_name == "pass4":
+                acc_path = str(accepted_dir / "detections.json")
+                acc_type = "json"
+            else:  # pass6
+                acc_path = str(accepted_dir / "export.mp4")
+                acc_type = "mp4"
+            session.add(Artifact(
+                id=acc_art_id,
+                project_id=job.project_id,
+                pass_name=job.pass_name,
+                artifact_role="accepted",
+                artifact_type=acc_type,
+                path=acc_path,
+                job_id=job.id,
+            ))
+            pass_row.state = PassState.accepted.value
+            pass_row.is_dirty = False
+            pass_row.latest_accepted_artifact_id = acc_art_id
+            _write_event(session, job.project_id, job.id, "pass_accepted", {
+                "pass_name": job.pass_name,
+            })
+        else:
+            pass_row.state = PassState.waiting_for_user.value
+            _write_event(session, job.project_id, job.id, "pass_waiting_for_user", {
+                "pass_name": job.pass_name,
+                "median_bg_artifact_id": median_bg_artifact_id,
+            })
         session.commit()
 
     logger.info("Completed %s job=%s", job.pass_name, job.id)

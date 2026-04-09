@@ -86,9 +86,10 @@ async def test_create_project(client):
     assert data["id"]
     assert data["name"] == "Test Project"
     assert data["status"] == "created"
-    # All four passes created with not_started state.
-    assert len(data["passes"]) == 4
+    # All passes (pass1-pass5) created with not_started state.
+    assert len(data["passes"]) == 5
     assert all(p["state"] == "not_started" for p in data["passes"])
+    assert all(p["is_dirty"] == False for p in data["passes"])
 
 
 @pytest.mark.asyncio
@@ -104,7 +105,7 @@ async def test_upload_video(client, synthetic_video):
         )
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["status"] == "pass1_ready"
+    assert data["status"] == "video_ready"
     assert data["video_duration_s"] is not None
     assert data["video_duration_s"] > 0
 
@@ -182,10 +183,10 @@ async def test_pass1_full_lifecycle(client, synthetic_video, app_with_tmp_data):
     resp = await client.post(f"/api/projects/{project_id}/passes/pass1/accept")
     assert resp.status_code == 200
 
-    # Project status should be pass1_accepted.
+    # Project status should be in_progress.
     resp = await client.get(f"/api/projects/{project_id}")
     data = resp.json()
-    assert data["status"] == "pass1_accepted"
+    assert data["status"] == "in_progress"
 
     # Pass state should be accepted.
     pass1 = next(p for p in data["passes"] if p["pass_name"] == "pass1")
@@ -198,4 +199,4 @@ async def test_pass1_full_lifecycle(client, synthetic_video, app_with_tmp_data):
 
     # Reload project (simulate browser reload).
     resp = await client.get(f"/api/projects/{project_id}")
-    assert resp.json()["status"] == "pass1_accepted"
+    assert resp.json()["status"] == "in_progress"

@@ -39,6 +39,8 @@ class ProjectSummary(BaseModel):
 class PassStatusSummary(BaseModel):
     pass_name: str
     state: str
+    is_dirty: bool = False
+    runnable: bool = True
     current_job_id: str | None = None
     last_run_duration_s: float | None = None
     updated_at: datetime

@@ -8,19 +8,7 @@ from enum import Enum
 class ProjectStatus(str, Enum):
     created = "created"
     video_ready = "video_ready"
-    pass1_ready = "pass1_ready"
-    pass1_waiting_for_review = "pass1_waiting_for_review"
-    pass1_accepted = "pass1_accepted"
-    pass2_waiting_for_review = "pass2_waiting_for_review"
-    pass2_accepted = "pass2_accepted"
-    pass3_waiting_for_review = "pass3_waiting_for_review"
-    pass3_accepted = "pass3_accepted"
-    pass4_waiting_for_review = "pass4_waiting_for_review"
-    pass4_accepted = "pass4_accepted"
-    pass5_waiting_for_review = "pass5_waiting_for_review"
-    pass5_accepted = "pass5_accepted"
-    pass6_waiting_for_review = "pass6_waiting_for_review"
-    replay_ready = "replay_ready"
+    in_progress = "in_progress"
 
 
 class PassState(str, Enum):

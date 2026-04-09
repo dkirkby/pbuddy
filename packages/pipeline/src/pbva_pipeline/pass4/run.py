@@ -65,9 +65,6 @@ class Pass4:
         bg_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "median_background_0.png"
         if not bg_path.exists():
             raise FileNotFoundError(f"Median background not found: {bg_path}")
-        p2_result = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json"
-        if not p2_result.exists():
-            raise FileNotFoundError("Pass 2 accepted result.json not found")
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
         if not rally_path.exists():
             raise FileNotFoundError("Pass 2 accepted rally.json not found — record rallies in Pass 2 first")
@@ -103,11 +100,11 @@ class Pass4:
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
 
         progress.update(0.05, "setup", "Loading ball radius, annotations, and rally bounds from pass 2…")
-        p2_result = json.loads(
-            (ctx.paths.project_root / "passes" / "pass2" / "accepted" / "result.json").read_text()
-        )
-        max_ball_radius = p2_result.get("max_ball_radius", 16)
-        min_blob_radius = p2_result.get("min_ball_radius", 4) / 4
+        ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
+        _ann_data = json.loads(ann_path.read_text()).get("annotations", {}) if ann_path.exists() else {}
+        _radii = [v.get("radius", 0) for v in _ann_data.values() if v.get("radius", 0) > 0]
+        max_ball_radius = round(max(_radii)) if _radii else 16
+        min_blob_radius = (round(min(_radii)) if _radii else 4) / 4
 
         # Load rally bounds; rally frame numbers are browser-side (OpenCV frame_idx + 1).
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"

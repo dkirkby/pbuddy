@@ -29,11 +29,34 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _project_to_detail(project: Project) -> ProjectDetail:
+def _pass_runnable(project_id: str, pass_name: str, data_root: Path) -> bool:
+    """Return False if any required accepted input files are absent."""
+    accepted = lambda pass_n: p.pass_accepted_dir(data_root, project_id, pass_n)
+    if pass_name == "pass3":
+        return (
+            (accepted("pass2") / "annotations.json").exists()
+            and (accepted("pass2") / "patches" / "raw").exists()
+        )
+    if pass_name == "pass4":
+        return (
+            (accepted("pass1") / "tent_mask.png").exists()
+            and (accepted("pass2") / "rally.json").exists()
+            and (accepted("pass3") / "ball_color_polygons.json").exists()
+        )
+    if pass_name == "pass5":
+        return (accepted("pass4") / "detections.json").exists()
+    if pass_name == "pass6":
+        return (accepted("pass2") / "rally.json").exists()
+    return True
+
+
+def _project_to_detail(project: Project, data_root: Path | None = None) -> ProjectDetail:
     pass_statuses = [
         PassStatusSummary(
             pass_name=ps.pass_name,
             state=ps.state,
+            is_dirty=ps.is_dirty,
+            runnable=_pass_runnable(project.id, ps.pass_name, data_root) if data_root else True,
             current_job_id=ps.current_job_id,
             last_run_duration_s=ps.last_run_duration_s,
             updated_at=ps.updated_at,
@@ -93,7 +116,7 @@ def create_project(
     # Create filesystem directories.
     p.ensure_project_dirs(settings.data_root, project_id)
 
-    return _project_to_detail(project)
+    return _project_to_detail(project, settings.data_root)
 
 
 @router.get("", response_model=list[ProjectSummary])
@@ -117,7 +140,7 @@ def list_projects(db: Session = Depends(get_db)):
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)
-def get_project(project_id: str, db: Session = Depends(get_db)):
+def get_project(project_id: str, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
     project = db.execute(
@@ -125,7 +148,7 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
     ).scalar_one_or_none()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    return _project_to_detail(project)
+    return _project_to_detail(project, settings.data_root)
 
 
 @router.post("/{project_id}/video")
@@ -161,12 +184,12 @@ async def upload_video(
     project.video_fps = meta.get("fps")
     project.video_width = meta.get("width")
     project.video_height = meta.get("height")
-    project.status = ProjectStatus.pass1_ready.value
+    project.status = ProjectStatus.video_ready.value
     project.updated_at = _utcnow()
     db.commit()
     db.refresh(project)
 
-    return {"ok": True, "data": _project_to_detail(project)}
+    return {"ok": True, "data": _project_to_detail(project, settings.data_root)}
 
 
 @router.delete("/{project_id}", status_code=204)

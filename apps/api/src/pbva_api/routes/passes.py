@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from pbva_core.dependencies import RUN_DEPENDENTS, SETTINGS_DEPENDENTS
 from pbva_core.enums import ArtifactRole, JobStatus, PassState, ProjectStatus
 from pbva_core.types import (
     ArtifactRef,
@@ -26,29 +27,86 @@ from pbva_api.dependencies import get_db, get_settings
 
 router = APIRouter(prefix="/api/projects", tags=["passes"])
 
-# Project status to set when a pass is re-queued (before the new run completes).
-_RUN_RESETS_STATUS: dict[str, ProjectStatus] = {
-    "pass1": ProjectStatus.pass1_ready,
-    "pass2": ProjectStatus.pass1_accepted,
-    "pass3": ProjectStatus.pass2_accepted,
-    "pass4": ProjectStatus.pass3_accepted,
-    "pass5": ProjectStatus.pass4_accepted,
-    "pass6": ProjectStatus.pass2_accepted,
-}
-
-# Passes that must be invalidated when a given pass is re-run.
-_DOWNSTREAM_PASSES: dict[str, list[str]] = {
-    "pass1": ["pass2", "pass3", "pass4", "pass5", "pass6"],
-    "pass2": ["pass3", "pass4", "pass5", "pass6"],
-    "pass3": ["pass4", "pass5"],
-    "pass4": ["pass5"],
-    "pass5": [],
-    "pass6": [],
-}
+# States in which a pass is actively working — dirty marking is deferred until done.
+_IN_FLIGHT = {PassState.queued.value, PassState.running.value}
 
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _rebuild_pass1_accepted(db: Session, project_id: str, settings) -> None:
+    """Regenerate pass1 accepted artifacts (tent_mask.png + result.json) in-place.
+
+    Called both from accept_pass1 and from submit_pass1_corrections when pass1 is
+    already accepted, so that court-corner changes take effect immediately without
+    requiring an explicit re-accept.
+    """
+    from pbva_core import paths as p
+    from pbva_core.types import Pass1RawResult, Pass1CorrectionPayload
+    from pbva_pipeline.base import NullProgress, PassPaths, PassContext
+    from pbva_pipeline.pass1.run import Pass1
+
+    pass_row = db.execute(
+        select(Pass)
+        .where(Pass.project_id == project_id)
+        .where(Pass.pass_name == "pass1")
+    ).scalar_one_or_none()
+    if pass_row is None:
+        return
+
+    raw_path = p.pass_raw_dir(settings.data_root, project_id, "pass1") / "result.json"
+    if not raw_path.exists():
+        return  # raw output not yet produced; nothing to regenerate
+
+    raw_result = Pass1RawResult.model_validate_json(raw_path.read_text())
+
+    corrections = None
+    if pass_row.latest_correction_id:
+        corr_art = db.get(Artifact, pass_row.latest_correction_id)
+        if corr_art and Path(corr_art.path).exists():
+            corrections = Pass1CorrectionPayload.model_validate_json(Path(corr_art.path).read_text())
+
+    median_bg_artifact_id = pass_row.latest_raw_artifact_id or ""
+
+    project = db.get(Project, project_id)
+    pass_paths = PassPaths(
+        project_root=p.project_root(settings.data_root, project_id),
+        uploads_dir=p.uploads_dir(settings.data_root, project_id),
+        derived_dir=p.derived_dir(settings.data_root, project_id),
+        pass_raw_dir=p.pass_raw_dir(settings.data_root, project_id, "pass1"),
+        pass_corrections_dir=p.pass_corrections_dir(settings.data_root, project_id, "pass1"),
+        pass_accepted_dir=p.pass_accepted_dir(settings.data_root, project_id, "pass1"),
+    )
+    ctx = PassContext(
+        project_id=project_id,
+        project_name=project.name,
+        video_path=Path(project.video_path) if project.video_path else pass_paths.original_video,
+        video_duration_s=project.video_duration_s or 0.0,
+        video_fps=project.video_fps or 30.0,
+        video_width=project.video_width or 1920,
+        video_height=project.video_height or 1080,
+        paths=pass_paths,
+        settings=settings,
+        job_id=pass_row.current_job_id or "",
+        progress=NullProgress(),
+    )
+    Pass1().build_accepted_output(ctx, raw_result, corrections, median_bg_artifact_id)
+
+
+def _mark_settings_dirty(db: Session, project_id: str, pass_name: str) -> None:
+    """Mark downstream passes dirty after pass_name's settings are saved."""
+    for downstream in SETTINGS_DEPENDENTS.get(pass_name, []):
+        ds_row = db.execute(
+            select(Pass)
+            .where(Pass.project_id == project_id)
+            .where(Pass.pass_name == downstream)
+        ).scalar_one_or_none()
+        if ds_row is None or ds_row.state in _IN_FLIGHT:
+            continue
+        if ds_row.state != PassState.not_started.value:
+            ds_row.is_dirty = True
+            ds_row.updated_at = _utcnow()
 
 
 def _get_project_or_404(db: Session, project_id: str) -> Project:
@@ -104,9 +162,10 @@ def run_pass(
     if pass_name == "pass4":
         _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
 
-    # Reset downstream passes to not_started so stale results are never shown.
-    # If pass4 is actively running, cancel it first so the worker is freed.
-    for downstream in _DOWNSTREAM_PASSES.get(pass_name, []):
+    # Mark downstream passes dirty so the UI shows Re-Run buttons.
+    # If pass4 is actively running, cancel it first (can't mix mid-run results
+    # with new upstream inputs).
+    for downstream in RUN_DEPENDENTS.get(pass_name, []):
         ds_row = db.execute(
             select(Pass)
             .where(Pass.project_id == project_id)
@@ -115,41 +174,17 @@ def run_pass(
         if ds_row is None or ds_row.state == PassState.not_started.value:
             continue
         # Cancel a running pass4 job so the worker can pick up the new upstream job.
-        if ds_row.state in (PassState.running.value, PassState.queued.value):
+        if ds_row.state in _IN_FLIGHT:
             if downstream == "pass4" and ds_row.current_job_id:
                 ds_job = db.get(Job, ds_row.current_job_id)
                 if ds_job and ds_job.status in ("running", "queued"):
                     ds_job.status = "cancel_requested"
                     _pass4_pause_file(settings.data_root, project_id).unlink(missing_ok=True)
-        ds_row.state = PassState.not_started.value
-        ds_row.latest_raw_artifact_id = None
-        ds_row.latest_correction_id = None
-        ds_row.latest_accepted_artifact_id = None
-        ds_row.current_job_id = None
-        ds_row.updated_at = _utcnow()
-
-    # Clear pass4 raw outputs when re-running so stale patches and detections
-    # are not mixed with results from the new run.
-    if pass_name == "pass4":
-        import shutil as _shutil
-        from pbva_core import paths as _p
-        p4_raw = _p.pass_raw_dir(settings.data_root, project_id, "pass4")
-        for _fname in ("detections.json", "detections_map.png"):
-            (p4_raw / _fname).unlink(missing_ok=True)
-        _patches = p4_raw / "patches"
-        if _patches.exists():
-            _shutil.rmtree(_patches)
-
-    # Clear pass2 corrections (annotations + patches) so a re-run starts fresh.
-    if pass_name == "pass2":
-        import shutil
-        from pbva_core import paths as p
-        corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
-        ann_path = corrections_dir / "annotations.json"
-        ann_path.unlink(missing_ok=True)
-        patches_dir = corrections_dir / "patches"
-        if patches_dir.exists():
-            shutil.rmtree(patches_dir)
+        # Only mark dirty if not already in flight (in-flight pass will be marked
+        # dirty when it completes, or user can re-run again after it finishes).
+        if ds_row.state not in _IN_FLIGHT:
+            ds_row.is_dirty = True
+            ds_row.updated_at = _utcnow()
 
     # Create job.
     job_id = str(uuid.uuid4())
@@ -163,19 +198,19 @@ def run_pass(
     )
     db.add(job)
 
-    # Reset pass state and clear stale artifact pointers.
+    # Reset pass state and clear stale artifact pointers for this pass.
+    # Downstream passes keep their state and artifacts (they're just marked dirty).
     pass_row.state = PassState.queued.value
+    pass_row.is_dirty = False
     pass_row.current_job_id = job_id
     pass_row.latest_raw_artifact_id = None
     pass_row.latest_correction_id = None
     pass_row.latest_accepted_artifact_id = None
     pass_row.updated_at = _utcnow()
 
-    # Reset project status so the UI reflects that the pass is re-running.
-    reset_status = _RUN_RESETS_STATUS.get(pass_name)
-    if reset_status is not None:
-        project.status = reset_status.value
-        project.updated_at = _utcnow()
+    # Update project status to in_progress to reflect active work.
+    project.status = ProjectStatus.in_progress.value
+    project.updated_at = _utcnow()
 
     db.commit()
 
@@ -254,10 +289,10 @@ def submit_pass1_corrections(
     settings=Depends(get_settings),
 ):
     pass_row = _get_pass_or_404(db, project_id, "pass1")
-    if pass_row.state != PassState.waiting_for_user.value:
+    if pass_row.state in _IN_FLIGHT:
         raise HTTPException(
             status_code=409,
-            detail=f"Pass 1 is in state '{pass_row.state}', not waiting_for_user",
+            detail=f"Pass 1 is currently {pass_row.state}; wait for it to finish before saving corrections",
         )
 
     # Validate correction payload.
@@ -283,10 +318,16 @@ def submit_pass1_corrections(
     db.add(art)
     pass_row.latest_correction_id = art_id
     pass_row.updated_at = _utcnow()
+
+    # If pass1 is already accepted, regenerate tent_mask.png immediately so that
+    # downstream passes receive up-to-date accepted artifacts without a manual re-accept.
+    if pass_row.state == PassState.accepted.value:
+        _rebuild_pass1_accepted(db, project_id, settings)
+
+    _mark_settings_dirty(db, project_id, "pass1")
     db.commit()
 
     return {"ok": True}
-
 
 
 @router.post("/{project_id}/passes/pass1/accept")
@@ -296,64 +337,19 @@ def accept_pass1(
     settings=Depends(get_settings),
 ):
     pass_row = _get_pass_or_404(db, project_id, "pass1")
-    if pass_row.state != PassState.waiting_for_user.value:
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
         raise HTTPException(
             status_code=409,
             detail=f"Pass 1 is in state '{pass_row.state}', cannot accept",
         )
 
-    # Load raw result.
     from pbva_core import paths as p
     raw_path = p.pass_raw_dir(settings.data_root, project_id, "pass1") / "result.json"
     if not raw_path.exists():
         raise HTTPException(status_code=500, detail="Raw result.json not found")
 
-    from pbva_core.types import Pass1RawResult
-    raw_result = Pass1RawResult.model_validate_json(raw_path.read_text())
-
-    # Load corrections if any.
-    corrections = None
-    if pass_row.latest_correction_id:
-        corr_art = db.get(Artifact, pass_row.latest_correction_id)
-        if corr_art and Path(corr_art.path).exists():
-            from pbva_core.types import Pass1CorrectionPayload
-            corrections = Pass1CorrectionPayload.model_validate_json(Path(corr_art.path).read_text())
-
-    # Find median background artifact ID.
-    median_bg_artifact_id = ""
-    if pass_row.latest_raw_artifact_id:
-        median_bg_artifact_id = pass_row.latest_raw_artifact_id
-
-    # Build accepted output.
-    from pbva_pipeline.base import NullProgress, PassPaths
-    from pbva_pipeline.pass1.run import Pass1
-
-    pass_paths = PassPaths(
-        project_root=p.project_root(settings.data_root, project_id),
-        uploads_dir=p.uploads_dir(settings.data_root, project_id),
-        derived_dir=p.derived_dir(settings.data_root, project_id),
-        pass_raw_dir=p.pass_raw_dir(settings.data_root, project_id, "pass1"),
-        pass_corrections_dir=p.pass_corrections_dir(settings.data_root, project_id, "pass1"),
-        pass_accepted_dir=p.pass_accepted_dir(settings.data_root, project_id, "pass1"),
-    )
-    project = db.get(Project, project_id)
-    from pbva_core.config import Settings as CoreSettings
-    from pbva_pipeline.base import PassContext
-    ctx = PassContext(
-        project_id=project_id,
-        project_name=project.name,
-        video_path=Path(project.video_path) if project.video_path else pass_paths.original_video,
-        video_duration_s=project.video_duration_s or 0.0,
-        video_fps=project.video_fps or 30.0,
-        video_width=project.video_width or 1920,
-        video_height=project.video_height or 1080,
-        paths=pass_paths,
-        settings=settings,
-        job_id=pass_row.current_job_id or "",
-        progress=NullProgress(),
-    )
-
-    accepted = Pass1().build_accepted_output(ctx, raw_result, corrections, median_bg_artifact_id)
+    # Regenerate accepted artifacts (tent_mask.png + result.json).
+    _rebuild_pass1_accepted(db, project_id, settings)
 
     # Register accepted artifact.
     accepted_path = p.pass_accepted_dir(settings.data_root, project_id, "pass1") / "result.json"
@@ -370,10 +366,12 @@ def accept_pass1(
 
     # Update pass and project state.
     pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
-    project.status = ProjectStatus.pass1_accepted.value
+    project = db.get(Project, project_id)
+    project.status = ProjectStatus.in_progress.value
     project.updated_at = _utcnow()
 
     # Write event.
@@ -386,7 +384,7 @@ def accept_pass1(
     db.add(ev)
     db.commit()
 
-    return {"ok": True, "data": accepted.model_dump(mode="json")}
+    return {"ok": True}
 
 
 @router.get("/{project_id}/passes/pass2/corrections")
@@ -434,10 +432,10 @@ def save_pass2_corrections(
 ):
     import base64
     pass_row = _get_pass_or_404(db, project_id, "pass2")
-    if pass_row.state != PassState.waiting_for_user.value:
+    if pass_row.state in _IN_FLIGHT:
         raise HTTPException(
             status_code=409,
-            detail=f"Pass 2 is in state '{pass_row.state}', not waiting_for_user",
+            detail=f"Pass 2 is currently {pass_row.state}; wait for it to finish before saving corrections",
         )
 
     from pbva_pipeline.pass2.run import Pass2
@@ -485,6 +483,8 @@ def save_pass2_corrections(
     ))
     pass_row.latest_correction_id = art_id
     pass_row.updated_at = _utcnow()
+
+    _mark_settings_dirty(db, project_id, "pass2")
     db.commit()
 
     return {"ok": True}
@@ -497,7 +497,7 @@ def accept_pass2(
     settings=Depends(get_settings),
 ):
     pass_row = _get_pass_or_404(db, project_id, "pass2")
-    if pass_row.state != PassState.waiting_for_user.value:
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
         raise HTTPException(
             status_code=409,
             detail=f"Pass 2 is in state '{pass_row.state}', cannot accept",
@@ -578,10 +578,11 @@ def accept_pass2(
     ))
 
     pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
-    project.status = ProjectStatus.pass2_accepted.value
+    project.status = ProjectStatus.in_progress.value
     project.updated_at = _utcnow()
 
     db.add(Event(
@@ -667,6 +668,8 @@ def save_pass3_corrections(
     ))
     pass_row.latest_correction_id = art_id
     pass_row.updated_at = _utcnow()
+
+    _mark_settings_dirty(db, project_id, "pass3")
     db.commit()
     return {"ok": True}
 
@@ -678,7 +681,7 @@ def accept_pass3(
     settings=Depends(get_settings),
 ):
     pass_row = _get_pass_or_404(db, project_id, "pass3")
-    if pass_row.state != PassState.waiting_for_user.value:
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
         raise HTTPException(status_code=409, detail=f"Pass 3 is in state '{pass_row.state}', cannot accept")
 
     from pbva_core import paths as p
@@ -726,10 +729,11 @@ def accept_pass3(
         path=str(accepted_dir / "ball_color_polygons.json"),
     ))
     pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
-    project.status = ProjectStatus.pass3_accepted.value
+    project.status = ProjectStatus.in_progress.value
     project.updated_at = _utcnow()
 
     db.add(Event(
@@ -884,11 +888,12 @@ def accept_pass4(
         path=str(accepted_dir / "detections.json"),
     ))
     pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
     project = db.get(Project, project_id)
-    project.status = ProjectStatus.pass4_accepted.value
+    project.status = ProjectStatus.in_progress.value
     project.updated_at = _utcnow()
 
     db.add(Event(
@@ -927,12 +932,16 @@ def get_pass5_raw_file(
 def save_pass5_corrections(
     project_id: str,
     body: dict = Body(...),
+    db: Session = Depends(get_db),
     settings=Depends(get_settings),
 ):
     from pbva_core import paths as p
     corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass5")
     corrections_dir.mkdir(parents=True, exist_ok=True)
     (corrections_dir / "corrections.json").write_text(json.dumps(body, indent=2))
+
+    _mark_settings_dirty(db, project_id, "pass5")
+    db.commit()
     return {"ok": True}
 
 
@@ -943,7 +952,7 @@ def accept_pass5(
     settings=Depends(get_settings),
 ):
     pass_row = _get_pass_or_404(db, project_id, "pass5")
-    if pass_row.state != PassState.waiting_for_user.value:
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
         raise HTTPException(status_code=409, detail=f"Pass 5 is in state '{pass_row.state}', cannot accept")
 
     from pbva_core import paths as p
@@ -972,11 +981,12 @@ def accept_pass5(
         path=str(accepted_dir / "segments.json"),
     ))
     pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
     project = db.get(Project, project_id)
-    project.status = ProjectStatus.pass5_accepted.value
+    project.status = ProjectStatus.in_progress.value
     project.updated_at = _utcnow()
 
     db.add(Event(
@@ -1075,10 +1085,11 @@ def accept_pass6(
         path=str(accepted_dir / "export.mp4"),
     ))
     pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
     pass_row.latest_accepted_artifact_id = art_id
     pass_row.updated_at = _utcnow()
 
-    project.status = ProjectStatus.replay_ready.value
+    project.status = ProjectStatus.in_progress.value
     project.updated_at = _utcnow()
 
     db.add(Event(

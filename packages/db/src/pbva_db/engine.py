@@ -40,6 +40,13 @@ def init_db(engine: Engine) -> None:
             conn.commit()
         except Exception:
             pass  # Column already exists
+        try:
+            conn.execute(__import__("sqlalchemy").text(
+                "ALTER TABLE passes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
 
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:
