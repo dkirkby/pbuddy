@@ -6,6 +6,10 @@ import json
 import math
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy as np
+
 from pbva_core.types import Pass5AcceptedOutput, Pass5RawResult
 from pbva_pipeline.base import PassContext
 
@@ -128,6 +132,51 @@ def _build_segments(
     return segments
 
 
+def _plot_segments(segments: list[dict], out_path: Path) -> None:
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig.suptitle(f"Pass 5 — {len(segments)} segments", fontsize=13)
+
+    lengths = np.array([s["length"] for s in segments], dtype=float)
+    speeds = np.array([s["mean_speed_px_per_frame"] for s in segments], dtype=float)
+    scores = lengths * speeds
+
+    # Top-left: scatter length vs speed.
+    ax = axes[0, 0]
+    ax.scatter(lengths, speeds, s=20, alpha=0.7)
+    ax.set_xlabel("length (frames)")
+    ax.set_ylabel("mean speed (px/fr)")
+    ax.set_title("length vs mean speed")
+
+    # The three trajectory subplots share the same layout but differ in colormap value.
+    _COLOR_CONFIGS = [
+        (axes[0, 1], lengths, "length (frames)", "colored by length"),
+        (axes[1, 0], speeds,  "mean speed (px/fr)", "colored by mean speed"),
+        (axes[1, 1], scores,  "length × mean speed", "colored by length × speed"),
+    ]
+
+    for ax, values, cbar_label, title in _COLOR_CONFIGS:
+        vmin, vmax = values.min(), values.max()
+        norm = plt.Normalize(vmin=vmin, vmax=vmax if vmax > vmin else vmin + 1)
+        colormap = cm.viridis
+        for seg, val in zip(segments, values):
+            xs = [d["cx"] for d in seg["detections"]]
+            ys = [d["cy"] for d in seg["detections"]]
+            color = colormap(norm(val))
+            ax.plot(xs, ys, color=color, linewidth=1.2, alpha=0.8)
+        sm = cm.ScalarMappable(norm=norm, cmap=colormap)
+        sm.set_array([])
+        fig.colorbar(sm, ax=ax, label=cbar_label, fraction=0.046, pad=0.04)
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.invert_yaxis()
+        ax.set_title(title)
+        ax.set_xlabel("cx (px)")
+        ax.set_ylabel("cy (px)")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+
+
 class Pass5:
     name = "pass5"
 
@@ -169,6 +218,10 @@ class Pass5:
         }
         (raw_dir / "segments.json").write_text(json.dumps(output, indent=2))
 
+        progress.update(0.95, "plot", "Plotting segments…")
+        if segments:
+            _plot_segments(segments, raw_dir / "segments.png")
+
         progress.update(1.0, "done", f"Built {len(segments)} segments")
         return Pass5RawResult(
             segment_count=len(segments),
@@ -179,8 +232,14 @@ class Pass5:
         )
 
     def write_raw_outputs(self, ctx: PassContext, result: Pass5RawResult) -> list[dict]:
-        path = ctx.paths.pass_raw_dir / "segments.json"
-        return [{"role": "raw", "type": "json", "path": str(path)}] if path.exists() else []
+        artifacts = []
+        json_path = ctx.paths.pass_raw_dir / "segments.json"
+        if json_path.exists():
+            artifacts.append({"role": "raw", "type": "json", "path": str(json_path)})
+        png_path = ctx.paths.pass_raw_dir / "segments.png"
+        if png_path.exists():
+            artifacts.append({"role": "raw", "type": "image", "path": str(png_path)})
+        return artifacts
 
     def validate_corrections(self, payload: dict) -> dict:
         return payload
