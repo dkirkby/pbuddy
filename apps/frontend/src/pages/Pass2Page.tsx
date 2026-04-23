@@ -94,19 +94,27 @@ function computePhaseInfo(
   return { isServePhase: false, targetType: 'existing-end', targetIndex: chosen.index }
 }
 
-function getServingTeamIndex(serverName: string, names: PlayerNames): 0 | 1 {
-  return (serverName === names.serving_team_right || serverName === names.serving_team_left) ? 0 : 1
+function getServingTeamIndex(serverName: string, names: PlayerNames, farTeamServesFirst: boolean): 0 | 1 {
+  const farTeamWins = (serverName === names.far_team_right || serverName === names.far_team_left)
+  // team 0 in the game = far team when farTeamServesFirst, else near team
+  return farTeamWins === farTeamServesFirst ? 0 : 1
+}
+
+function makeGame(names: PlayerNames, farTeamServesFirst: boolean): PickleballDoublesGame {
+  return new PickleballDoublesGame(
+    names.far_team_right, names.far_team_left,
+    names.near_team_right, names.near_team_left,
+    farTeamServesFirst,
+  )
 }
 
 function replayGame(
   rallies: RallyRecord[],
   names: PlayerNames,
+  farTeamServesFirst: boolean,
 ): { updatedRallies: RallyRecord[]; finalGame: PickleballDoublesGame } {
   const sorted = [...rallies].sort((a, b) => a.start_frame - b.start_frame)
-  const game = new PickleballDoublesGame(
-    names.serving_team_right, names.serving_team_left,
-    names.receiving_team_right, names.receiving_team_left,
-  )
+  const game = makeGame(names, farTeamServesFirst)
   const updatedRallies = sorted.map(r => {
     const pos = game.positions
     const updated: RallyRecord = {
@@ -132,11 +140,13 @@ export default function Pass2Page() {
   const [patches, setPatches] = useState<Record<string, string>>({})
   const [patchOrder, setPatchOrder] = useState<string[]>([])
   const [playerNames, setPlayerNames] = useState<PlayerNames>({
-    serving_team_right: 'Serving Team Right',
-    serving_team_left: 'Serving Team Left',
-    receiving_team_right: 'Receiving Team Right',
-    receiving_team_left: 'Receiving Team Left',
+    far_team_right: '',
+    far_team_left: '',
+    near_team_right: '',
+    near_team_left: '',
   })
+  const [namesFinalized, setNamesFinalized] = useState(false)
+  const [farTeamServesFirst, setFarTeamServesFirst] = useState<boolean | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -237,6 +247,12 @@ export default function Pass2Page() {
     }
     if (correctionsResp.data.player_names) {
       setPlayerNames(correctionsResp.data.player_names)
+      if (Object.values(correctionsResp.data.player_names).every(v => v.trim())) {
+        setNamesFinalized(true)
+      }
+    }
+    if (correctionsResp.data.far_team_serves_first !== undefined) {
+      setFarTeamServesFirst(correctionsResp.data.far_team_serves_first ?? null)
     }
     if (correctionsResp.data.rally) {
       setRallies(correctionsResp.data.rally)
@@ -256,14 +272,40 @@ export default function Pass2Page() {
   // Discard any pending (unstamped) serve when player names change.
   useEffect(() => {
     setPendingRally(null)
-  }, [playerNames.serving_team_right, playerNames.serving_team_left, playerNames.receiving_team_right, playerNames.receiving_team_left])
+  }, [playerNames.far_team_right, playerNames.far_team_left, playerNames.near_team_right, playerNames.near_team_left])
+
+  // Derive current physical positions from canonical names + how many times each team has won while serving.
+  // Odd win count means that team's right/left have physically swapped from their initial positions.
+  const { displayNames, farSwapped, nearSwapped } = useMemo(() => {
+    const farWins  = rallies.filter(r => r.servingTeamWinsRally &&
+      (r.serverName === playerNames.far_team_right || r.serverName === playerNames.far_team_left)).length
+    const nearWins = rallies.filter(r => r.servingTeamWinsRally &&
+      (r.serverName === playerNames.near_team_right || r.serverName === playerNames.near_team_left)).length
+    const fs = farWins  % 2 === 1
+    const ns = nearWins % 2 === 1
+    return {
+      displayNames: {
+        far_team_right:  fs ? playerNames.far_team_left  : playerNames.far_team_right,
+        far_team_left:   fs ? playerNames.far_team_right : playerNames.far_team_left,
+        near_team_right: ns ? playerNames.near_team_left : playerNames.near_team_right,
+        near_team_left:  ns ? playerNames.near_team_right: playerNames.near_team_left,
+      },
+      farSwapped: fs,
+      nearSwapped: ns,
+    }
+  }, [rallies, playerNames])
+
+  // Reset farTeamServesFirst when all rally data is cleared.
+  useEffect(() => {
+    if (rallies.length === 0 && pendingRally === null) {
+      setFarTeamServesFirst(null)
+    }
+  }, [rallies.length, pendingRally])
 
   // Derived game state at the current frame position.
   const gameDisplay = useMemo(() => {
-    const game = new PickleballDoublesGame(
-      playerNames.serving_team_right, playerNames.serving_team_left,
-      playerNames.receiving_team_right, playerNames.receiving_team_left,
-    )
+    if (farTeamServesFirst === null) return null
+    const game = makeGame(playerNames, farTeamServesFirst)
     const snap = () => {
       const pos = game.positions
       return { score: game.toString(), server: pos[game.serverPosition], receiver: pos[game.receiverPosition] }
@@ -280,7 +322,7 @@ export default function Pass2Page() {
       display = { score: pendingRally.score, server: pendingRally.serverName, receiver: pendingRally.receiverName }
     }
     return display
-  }, [currentFrameIndex, rallies, pendingRally, playerNames.serving_team_right, playerNames.serving_team_left, playerNames.receiving_team_right, playerNames.receiving_team_left])
+  }, [currentFrameIndex, rallies, pendingRally, farTeamServesFirst, playerNames])
 
   const phaseInfo = useMemo(
     () => computePhaseInfo(currentFrameIndex, rallies, pendingRally, resultData?.fps ?? 30),
@@ -288,38 +330,65 @@ export default function Pass2Page() {
   )
   const servePhase = phaseInfo.isServePhase
 
-  function handleServe() {
+  // Map a display-order key back to the canonical playerNames key, accounting for swaps.
+  function canonicalKey(displayKey: keyof PlayerNames): keyof PlayerNames {
+    if (displayKey === 'far_team_right')  return farSwapped ? 'far_team_left'  : 'far_team_right'
+    if (displayKey === 'far_team_left')   return farSwapped ? 'far_team_right' : 'far_team_left'
+    if (displayKey === 'near_team_right') return nearSwapped ? 'near_team_left' : 'near_team_right'
+    return nearSwapped ? 'near_team_right' : 'near_team_left'  // near_team_left
+  }
+
+  function handleNameEdit(displayKey: keyof PlayerNames, value: string) {
+    setPlayerNames(prev => ({ ...prev, [canonicalKey(displayKey)]: value }))
+    setDirty(true)
+  }
+
+  // Handle a Serve button click. isFarTeam identifies which team row was clicked.
+  // When farTeamServesFirst is null (first serve ever), the clicked team becomes the first server.
+  function handleServeClick(isFarTeam: boolean) {
+    let resolvedFarFirst = farTeamServesFirst
+    if (resolvedFarFirst === null) {
+      resolvedFarFirst = isFarTeam
+      setFarTeamServesFirst(isFarTeam)
+    }
+
     const { targetType, targetIndex } = phaseInfo
     if (targetType === 'new-serve') {
+      const { finalGame } = replayGame(rallies, playerNames, resolvedFarFirst)
+      const pos = finalGame.positions
       setPendingRally({
-        score: gameDisplay.score,
+        score: finalGame.toString(),
         start_frame: currentFrameIndex,
-        serverName: gameDisplay.server,
-        receiverName: gameDisplay.receiver,
+        serverName: pos[finalGame.serverPosition],
+        receiverName: pos[finalGame.receiverPosition],
       })
     } else if (targetType === 'existing-serve') {
       const updated = [...rallies]
       updated[targetIndex] = { ...updated[targetIndex], start_frame: currentFrameIndex }
-      setRallies(replayGame(updated, playerNames).updatedRallies)
+      setRallies(replayGame(updated, playerNames, resolvedFarFirst).updatedRallies)
     } else if (targetType === 'pending-serve') {
       setPendingRally(prev => prev ? { ...prev, start_frame: currentFrameIndex } : null)
     }
+
+    // Start playback if paused.
+    playerRef.current?.play()
     setDirty(true)
   }
 
   function handleRallyWinner(winningTeamIndex: 0 | 1) {
+    if (farTeamServesFirst === null) return
     const { targetType, targetIndex } = phaseInfo
     if (targetType === 'pending-end') {
       if (!pendingRally) return
-      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(pendingRally.serverName, playerNames)
+      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(pendingRally.serverName, playerNames, farTeamServesFirst)
       const record: RallyRecord = { ...pendingRally, stop_frame: currentFrameIndex, servingTeamWinsRally }
-      setRallies(replayGame([...rallies, record], playerNames).updatedRallies)
+      setRallies(replayGame([...rallies, record], playerNames, farTeamServesFirst).updatedRallies)
       setPendingRally(null)
     } else if (targetType === 'existing-end') {
-      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(rallies[targetIndex].serverName, playerNames)
+      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(rallies[targetIndex].serverName, playerNames, farTeamServesFirst)
       const updated = [...rallies]
       updated[targetIndex] = { ...updated[targetIndex], stop_frame: currentFrameIndex, servingTeamWinsRally }
-      setRallies(replayGame(updated, playerNames).updatedRallies)
+      setRallies(replayGame(updated, playerNames, farTeamServesFirst).updatedRallies)
     }
     setDirty(true)
   }
@@ -339,6 +408,42 @@ export default function Pass2Page() {
     []
   )
 
+  function handleDeleteRally(sortedAscIndex: number) {
+    if (farTeamServesFirst === null) return
+    const sorted = [...rallies].sort((a, b) => a.start_frame - b.start_frame)
+    sorted.splice(sortedAscIndex, 1)
+    setRallies(sorted.length === 0 ? [] : replayGame(sorted, playerNames, farTeamServesFirst).updatedRallies)
+    setDirty(true)
+  }
+
+  function handleRallyStartFrameEdit(sortedAscIndex: number) {
+    if (farTeamServesFirst === null) return
+    const sorted = [...rallies].sort((a, b) => a.start_frame - b.start_frame)
+    const rally = sorted[sortedAscIndex]
+    const prevStop = sortedAscIndex > 0 ? sorted[sortedAscIndex - 1].stop_frame : -Infinity
+    if (currentFrameIndex > prevStop && currentFrameIndex < rally.stop_frame) {
+      sorted[sortedAscIndex] = { ...rally, start_frame: currentFrameIndex }
+      setRallies(replayGame(sorted, playerNames, farTeamServesFirst).updatedRallies)
+      playerRef.current?.seekToFrame(currentFrameIndex)
+      setDirty(true)
+    }
+  }
+
+  function handleRallyStopFrameEdit(sortedAscIndex: number) {
+    if (farTeamServesFirst === null) return
+    const sorted = [...rallies].sort((a, b) => a.start_frame - b.start_frame)
+    const rally = sorted[sortedAscIndex]
+    const nextStart = sortedAscIndex < sorted.length - 1
+      ? sorted[sortedAscIndex + 1].start_frame
+      : pendingRally !== null ? pendingRally.start_frame : Infinity
+    if (currentFrameIndex > rally.start_frame && currentFrameIndex < nextStart) {
+      sorted[sortedAscIndex] = { ...rally, stop_frame: currentFrameIndex }
+      setRallies(replayGame(sorted, playerNames, farTeamServesFirst).updatedRallies)
+      playerRef.current?.seekToFrame(currentFrameIndex)
+      setDirty(true)
+    }
+  }
+
   function handleDeleteAnnotation(fi: string) {
     setAnnotations((prev) => { const next = { ...prev }; delete next[fi]; return next })
     setPatches((prev) => { const next = { ...prev }; delete next[fi]; return next })
@@ -351,7 +456,7 @@ export default function Pass2Page() {
     setSaving(true)
     setStatusMsg(null)
     try {
-      await api.savePass2Annotations(projectId!, annotations, patches, playerNames, rallies)
+      await api.savePass2Annotations(projectId!, annotations, patches, playerNames, farTeamServesFirst, rallies)
       setDirty(false)
       qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
       setStatusMsg('Saved.')
@@ -424,52 +529,115 @@ export default function Pass2Page() {
         {dirty && <span style={{ color: '#f90', marginLeft: 8 }}>⚠ Unsaved changes</span>}
       </p>
 
-      <div style={{ marginBottom: 8 }}>
-        {([
-          { keys: ['serving_team_right', 'serving_team_left'] as (keyof PlayerNames)[], labels: ['Serving Team Right', 'Serving Team Left'], teamIndex: 0 as 0 | 1 },
-          { keys: ['receiving_team_left', 'receiving_team_right'] as (keyof PlayerNames)[], labels: ['Receiving Team Left', 'Receiving Team Right'], teamIndex: 1 as 0 | 1 },
-        ]).map(({ keys, labels, teamIndex }) => (
-          <div key={keys[0]} style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 8 }}>
-            {keys.map((key, i) => (
-              <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, flex: '1 1 0' }}>
-                <span style={{ color: '#444' }}>{labels[i]}</span>
-                <input
-                  type="text"
-                  value={playerNames[key]}
-                  onChange={(e) => {
-                    setPlayerNames((prev) => ({ ...prev, [key]: e.target.value }))
-                    setDirty(true)
-                  }}
-                  style={{ padding: '4px 8px', fontSize: 14, borderRadius: 3, border: '1px solid #555', background: '#1a1a1a', color: '#eee', width: '100%', boxSizing: 'border-box' }}
-                />
-              </label>
-            ))}
-            <button
-              onClick={() => handleRallyWinner(teamIndex)}
-              disabled={servePhase}
-              style={{ padding: '5px 12px', fontSize: 13, cursor: servePhase ? 'default' : 'pointer', whiteSpace: 'nowrap', alignSelf: 'flex-end' }}
-            >
-              Rally Winner
-            </button>
-          </div>
-        ))}
-      </div>
+      {(() => {
+        const rows: { isFar: boolean; keys: [keyof PlayerNames, keyof PlayerNames]; labels: [string, string]; teamIndex: 0 | 1 }[] = [
+          { isFar: true,  keys: ['far_team_right',  'far_team_left'],   labels: ['Far Team Right',  'Far Team Left'],  teamIndex: 0 },
+          { isFar: false, keys: ['near_team_left',  'near_team_right'], labels: ['Near Team Left',  'Near Team Right'], teamIndex: 1 },
+        ]
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <button
-          onClick={handleServe}
-          disabled={!servePhase}
-          style={{ padding: '5px 14px', fontSize: 13, cursor: servePhase ? 'pointer' : 'default' }}
-        >
-          Serve
-        </button>
-        {gameDisplay && (
-          <span style={{ fontSize: 14, color: '#333' }}>
-            <span style={{ fontFamily: 'monospace', color: '#000' }}>{gameDisplay.score}</span>
-            {' '}{gameDisplay.server} serving to {gameDisplay.receiver}
-          </span>
-        )}
-      </div>
+        // Whether a name cell is clickable as a serve trigger.
+        // Before first serve: only right-side players (far_team_right, near_team_right) are eligible.
+        // After first serve: only the current server's cell.
+        const isServeClickable = (displayKey: keyof PlayerNames): boolean => {
+          if (!servePhase) return false
+          if (farTeamServesFirst === null) {
+            return displayKey === 'far_team_right' || displayKey === 'near_team_right'
+          }
+          return gameDisplay?.server === displayNames[displayKey]
+        }
+
+        if (!namesFinalized) {
+          const allFilled = Object.values(playerNames).every(v => v.trim())
+          return (
+            <div style={{ marginBottom: 8 }}>
+              {rows.map(({ keys, labels }) => (
+                <div key={keys[0]} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
+                  {keys.map((key, ki) => (
+                    <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, flex: '1 1 0' }}>
+                      <span style={{ color: '#444' }}>{labels[ki]}</span>
+                      <input
+                        type="text"
+                        value={playerNames[key]}
+                        onChange={(e) => { setPlayerNames(prev => ({ ...prev, [key]: e.target.value })); setDirty(true) }}
+                        placeholder={labels[ki]}
+                        style={{
+                          padding: '4px 8px', fontSize: 14, borderRadius: 3,
+                          border: '1px solid #555', background: '#1a1a1a',
+                          color: '#eee', width: '100%', boxSizing: 'border-box',
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                <button
+                  onClick={() => setNamesFinalized(true)}
+                  disabled={!allFilled}
+                  style={{ padding: '5px 14px', fontSize: 13, cursor: allFilled ? 'pointer' : 'default' }}
+                >
+                  Finalize Names
+                </button>
+              </div>
+            </div>
+          )
+        }
+
+        return (
+          <div style={{ marginBottom: 8 }}>
+            {rows.map(({ isFar, keys, labels, teamIndex }) => {
+              const rallyWinnerEnabled = !servePhase && farTeamServesFirst !== null
+              return (
+                <div key={keys[0]} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
+                  {keys.map((key, ki) => {
+                    const clickable = isServeClickable(key)
+                    return (
+                      <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, flex: '1 1 0' }}>
+                        <span style={{ color: '#444' }}>{labels[ki]}</span>
+                        <div
+                          onClick={clickable ? () => handleServeClick(isFar) : undefined}
+                          style={{
+                            padding: '4px 8px', fontSize: 14, borderRadius: 3,
+                            border: '1px solid #555',
+                            background: clickable ? '#8b0000' : '#1a1a1a',
+                            color: '#eee', cursor: clickable ? 'pointer' : 'default',
+                            userSelect: 'none',
+                          }}
+                        >
+                          {displayNames[key]}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <button
+                    onClick={() => handleRallyWinner(teamIndex)}
+                    disabled={!rallyWinnerEnabled}
+                    style={{
+                      padding: '5px 12px', fontSize: 13, whiteSpace: 'nowrap', alignSelf: 'flex-end',
+                      cursor: rallyWinnerEnabled ? 'pointer' : 'default',
+                      background: rallyWinnerEnabled ? '#8b0000' : undefined,
+                      color: rallyWinnerEnabled ? '#fff' : undefined,
+                      border: rallyWinnerEnabled ? '1px solid #cc0000' : undefined,
+                    }}
+                  >
+                    Rally Winner
+                  </button>
+                </div>
+              )
+            })}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+              {gameDisplay ? (
+                <span style={{ fontSize: 14, color: '#ccc' }}>
+                  <span style={{ fontFamily: 'monospace' }}>{gameDisplay.score}</span>
+                  {' '}{gameDisplay.server} serving to {gameDisplay.receiver}
+                </span>
+              ) : servePhase ? (
+                <span style={{ fontSize: 14, color: '#888' }}>Click a highlighted name to mark the first serve</span>
+              ) : null}
+            </div>
+          </div>
+        )
+      })()}
 
       {!resultData ? (
         <div style={{
@@ -577,6 +745,54 @@ export default function Pass2Page() {
             </div>
           ))}
         </div>
+      )}
+      {/* Rally table */}
+      {rallies.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 16 }}>
+          <thead>
+            <tr style={{ color: '#888', textAlign: 'left', borderBottom: '1px solid #333' }}>
+              <th style={{ padding: '4px 8px', fontWeight: 'normal' }}>Start</th>
+              <th style={{ padding: '4px 8px', fontWeight: 'normal' }}>Stop</th>
+              <th style={{ padding: '4px 8px', fontWeight: 'normal' }}>Description</th>
+              <th style={{ padding: '4px 8px', fontWeight: 'normal' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...rallies]
+              .sort((a, b) => b.start_frame - a.start_frame)
+              .map((rally, displayIdx) => {
+                const ascIdx = rallies.length - 1 - displayIdx
+                return (
+                  <tr key={rally.start_frame} style={{ borderBottom: '1px solid #222' }}>
+                    <td
+                      style={{ padding: '4px 8px', fontFamily: 'monospace', cursor: 'pointer', userSelect: 'none', textDecoration: 'underline dotted #555' }}
+                      onDoubleClick={() => handleRallyStartFrameEdit(ascIdx)}
+                      title="Double-click to set to current frame"
+                    >
+                      {rally.start_frame}
+                    </td>
+                    <td
+                      style={{ padding: '4px 8px', fontFamily: 'monospace', cursor: 'pointer', userSelect: 'none', textDecoration: 'underline dotted #555' }}
+                      onDoubleClick={() => handleRallyStopFrameEdit(ascIdx)}
+                      title="Double-click to set to current frame"
+                    >
+                      {rally.stop_frame}
+                    </td>
+                    <td style={{ padding: '4px 8px', color: '#ccc' }}>
+                      {rally.score} {rally.serverName} serving to {rally.receiverName}
+                    </td>
+                    <td style={{ padding: '4px 8px' }}>
+                      <button
+                        onClick={() => handleDeleteRally(ascIdx)}
+                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}
+                        title="Remove rally"
+                      >×</button>
+                    </td>
+                  </tr>
+                )
+              })}
+          </tbody>
+        </table>
       )}
     </div>
   )
