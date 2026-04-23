@@ -418,6 +418,8 @@ def get_pass2_corrections(
     result: dict = {**data, "patches": patches}
     if "player_names" in rally_json:
         result["player_names"] = rally_json["player_names"]
+    if "far_team_serves_first" in rally_json:
+        result["far_team_serves_first"] = rally_json["far_team_serves_first"]
     if "rally" in rally_json:
         result["rally"] = rally_json["rally"]
     return {"ok": True, "data": result}
@@ -461,12 +463,14 @@ def save_pass2_corrections(
         _header, b64_data = data_url.split(",", 1)
         (patches_dir / f"{int(frame_str):06d}.png").write_bytes(base64.b64decode(b64_data))
 
-    # Write rally.json with player names and rally records if either is provided.
-    if "player_names" in body or "rally" in body:
+    # Write rally.json with player names, serve-order flag, and rally records if any is provided.
+    if "player_names" in body or "far_team_serves_first" in body or "rally" in body:
         rally_path = corrections_dir / "rally.json"
         rally_data: dict = {}
         if "player_names" in body:
             rally_data["player_names"] = body["player_names"]
+        if "far_team_serves_first" in body:
+            rally_data["far_team_serves_first"] = body["far_team_serves_first"]
         if "rally" in body:
             rally_data["rally"] = body["rally"]
         rally_path.write_text(json.dumps(rally_data, indent=2))
@@ -487,6 +491,53 @@ def save_pass2_corrections(
     _mark_settings_dirty(db, project_id, "pass2")
     db.commit()
 
+    return {"ok": True}
+
+
+@router.post("/{project_id}/passes/pass2/reset")
+def reset_pass2(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    """Clear all Pass 2 annotations and reset to waiting_for_user so the user can re-annotate."""
+    pass_row = _get_pass_or_404(db, project_id, "pass2")
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass 2 is in state '{pass_row.state}', cannot reset",
+        )
+
+    from pbva_core import paths as p
+    import shutil
+
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass2")
+    if corrections_dir.exists():
+        shutil.rmtree(corrections_dir)
+
+    accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass2")
+    if accepted_dir.exists():
+        shutil.rmtree(accepted_dir)
+
+    pass_row.latest_correction_id = None
+    pass_row.latest_accepted_artifact_id = None
+    pass_row.state = PassState.waiting_for_user.value
+    pass_row.is_dirty = False
+    pass_row.updated_at = _utcnow()
+
+    for downstream in RUN_DEPENDENTS.get("pass2", []):
+        ds_row = db.execute(
+            select(Pass)
+            .where(Pass.project_id == project_id)
+            .where(Pass.pass_name == downstream)
+        ).scalar_one_or_none()
+        if ds_row is None or ds_row.state == PassState.not_started.value:
+            continue
+        if ds_row.state not in _IN_FLIGHT:
+            ds_row.is_dirty = True
+            ds_row.updated_at = _utcnow()
+
+    db.commit()
     return {"ok": True}
 
 

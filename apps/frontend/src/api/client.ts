@@ -140,8 +140,11 @@ export const api = {
   getPass2Corrections: (projectId: string) =>
     get<{ ok: boolean; data: Pass2Corrections }>(`/api/projects/${projectId}/passes/pass2/corrections`),
 
-  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>, patches: Record<string, string>, playerNames: Record<string, string>, rallies: unknown[]) =>
-    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations, patches, player_names: playerNames, rally: rallies }),
+  savePass2Annotations: (projectId: string, annotations: Record<string, BallAnnotation>, patches: Record<string, string>, playerNames: Record<string, string>, farTeamServesFirst: boolean | null, rallies: unknown[]) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/corrections`, { annotations, patches, player_names: playerNames, far_team_serves_first: farTeamServesFirst, rally: rallies }),
+
+  resetPass2: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/reset`),
 
   acceptPass2: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass2/accept`),

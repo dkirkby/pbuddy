@@ -70,6 +70,15 @@ export default function ProjectHome() {
     },
   })
 
+  const resetPass2 = useMutation({
+    mutationFn: () => api.resetPass2(projectId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['pass2-corrections', projectId] })
+      sessionStorage.removeItem(`pass2-pos-${projectId}`)
+    },
+  })
+
   const runPass3 = useMutation({
     mutationFn: () => api.runPass3(projectId!),
     onSuccess: () => { setProgress(null); qc.invalidateQueries({ queryKey: ['project', projectId] }) },
@@ -190,6 +199,21 @@ export default function ProjectHome() {
         reviewLabel="Review →"
         hideRerun
         alwaysReviewable
+        extraButtons={
+          (pass2?.state === 'waiting_for_user' || pass2?.state === 'accepted') ? (
+            <button
+              onClick={() => {
+                if (window.confirm('Clear all Pass 2 annotations? This cannot be undone.')) {
+                  resetPass2.mutate()
+                }
+              }}
+              disabled={resetPass2.isPending}
+              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 12, borderRadius: 4, color: '#c00', border: '1px solid #faa', background: '#fff' }}
+            >
+              {resetPass2.isPending ? 'Resetting…' : 'Reset'}
+            </button>
+          ) : undefined
+        }
       />
 
       {/* Pass 3 card */}
@@ -290,12 +314,13 @@ interface PassCardProps {
   /** If true, the Review button is shown even when the pass has no results yet. */
   alwaysReviewable?: boolean
   extraControls?: React.ReactNode
+  extraButtons?: React.ReactNode
 }
 
 function PassCard({
   title, description, pass, prereqMet, prereqLabel,
   progress, onRun, isPending, reviewPath, reviewLabel,
-  hideRerun, alwaysReviewable, extraControls,
+  hideRerun, alwaysReviewable, extraControls, extraButtons,
 }: PassCardProps) {
   const navigate = useNavigate()
   const state = pass?.state ?? 'not_started'
@@ -391,6 +416,7 @@ function PassCard({
           <span style={{ color: '#090' }}>✓ Accepted</span>
         )}
         {!hideRerun && !inFlight && (state === 'waiting_for_user' || state === 'accepted') && rerunBtn}
+        {!inFlight && extraButtons}
       </div>
     </div>
   )
