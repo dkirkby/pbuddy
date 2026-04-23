@@ -15,14 +15,29 @@ export default function Pass5Page() {
   const [accepting, setAccepting] = useState(false)
   const [currentFrame, setCurrentFrame] = useState(0)
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
+  const [deleteHistory, setDeleteHistory] = useState<number[]>([])
   const [dirty, setDirty] = useState(false)
   const [selectedSegId, setSelectedSegId] = useState<number | null>(null)
+  const [hoveredSegId, setHoveredSegId] = useState<number | null>(null)
   const hasEnteredSelectedRef = useRef(false)
 
   const { data: segData, isLoading } = useQuery({
     queryKey: ['pass5-segments', projectId],
     queryFn: () => api.getPass5Segments(projectId!),
   })
+
+  // Pass 1 artifacts for median background image.
+  const { data: pass1Artifacts } = useQuery({
+    queryKey: ['pass1-artifacts', projectId],
+    queryFn: () => api.getPass1Artifacts(projectId!),
+  })
+
+  const bgMedianUrl = useMemo(() => {
+    const art = pass1Artifacts?.data?.find(
+      (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background')
+    )
+    return art ? api.artifactUrl(art.id) : null
+  }, [pass1Artifacts])
 
   // Pass 4 detections for ball overlay.
   const { data: detectionsData } = useQuery({
@@ -152,6 +167,29 @@ export default function Pass5Page() {
   const bgWidth = pass2Meta?.bg_width ?? 960
   const bgHeight = pass2Meta?.bg_height ?? 540
 
+  const deleteSegment = (id: number) => {
+    setDeletedIds(prev => new Set([...prev, id]))
+    setDeleteHistory(prev => [...prev, id])
+    setDirty(true)
+  }
+
+  const undoDelete = () => {
+    setDeleteHistory(prev => {
+      if (prev.length === 0) return prev
+      const last = prev[prev.length - 1]
+      setDeletedIds(ids => { const next = new Set(ids); next.delete(last); return next })
+      return prev.slice(0, -1)
+    })
+  }
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoDelete() }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
       <button onClick={() => navigate(`/projects/${projectId}`)} style={{ marginBottom: 16 }}>
@@ -190,7 +228,46 @@ export default function Pass5Page() {
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
         Magenta circle: ball detection in current frame.
         Cyan polyline: segments containing the current frame or with an endpoint within 8 frames (full segment shown).
+        Click a segment path below to delete it.
       </p>
+
+      {bgMedianUrl && bgWidth && bgHeight && segments.length > 0 && (
+        <div style={{ position: 'relative', marginBottom: 12, border: '1px solid #ccc', borderRadius: 4, overflow: 'hidden' }}>
+          <img
+            src={bgMedianUrl}
+            alt="Background"
+            draggable={false}
+            style={{ display: 'block', width: '100%', filter: 'grayscale(1) brightness(2.2)', userSelect: 'none' }}
+          />
+          <svg
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+            viewBox={`0 0 ${bgWidth} ${bgHeight}`}
+            preserveAspectRatio="xMidYMid meet"
+          >
+            {segments.map((seg) => {
+              const pts = seg.detections.map(d => `${d.cx},${d.cy}`).join(' ')
+              const hovered = seg.id === hoveredSegId
+              return (
+                <polyline
+                  key={seg.id}
+                  points={pts}
+                  fill="none"
+                  stroke={hovered ? '#cc9900' : '#ff3300'}
+                  strokeWidth={6}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => deleteSegment(seg.id)}
+                  onMouseEnter={() => setHoveredSegId(seg.id)}
+                  onMouseLeave={() => setHoveredSegId(null)}
+                >
+                  <title>Segment {seg.id + 1} — click to delete</title>
+                </polyline>
+              )
+            })}
+          </svg>
+        </div>
+      )}
 
       <VideoPlayer
         ref={playerRef}
@@ -219,13 +296,13 @@ export default function Pass5Page() {
             <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 1 }}>
               <tr>
                 <th style={th}>#</th>
+                <th style={{ ...th, textAlign: 'center' }} />
                 <th style={th}>Overlaps</th>
                 <th style={th}>First frame</th>
                 <th style={th}>Last frame</th>
                 <th style={th}>Detections</th>
                 <th style={th}>Span (frames)</th>
                 <th style={th}>Speed (px/fr)</th>
-                <th style={{ ...th, textAlign: 'center' }} />
               </tr>
             </thead>
             <tbody>
@@ -241,19 +318,19 @@ export default function Pass5Page() {
                     title="Click to seek to segment start"
                   >
                     <td style={td}>{seg.id + 1}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteSegment(seg.id) }}
+                        title="Delete segment"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c00', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
+                      >✕</button>
+                    </td>
                     <td style={{ ...td, color: overlapCounts[seg.id] > 0 ? '#c60' : '#444' }}>{overlapCounts[seg.id]}</td>
                     <td style={td}>{seg.first_frame}</td>
                     <td style={td}>{seg.last_frame}</td>
                     <td style={td}>{seg.length}</td>
                     <td style={td}>{seg.last_frame - seg.first_frame + 1}</td>
                     <td style={td}>{seg.mean_speed_px_per_frame?.toFixed(1) ?? '—'}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setDeletedIds(prev => new Set([...prev, seg.id])); setDirty(true) }}
-                        title="Delete segment"
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c00', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
-                      >✕</button>
-                    </td>
                   </tr>
                 )
               })}
