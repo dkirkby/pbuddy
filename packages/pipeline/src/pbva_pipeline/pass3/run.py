@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -95,7 +94,7 @@ class Pass3:
         else:
             count_s = np.zeros((_H_BINS, _S_BINS, _V_BINS))
 
-        bg_pixel_count, count_b = self._write_bg_colors(ctx, annotations, progress, start=0.15, end=0.88)
+        bg_pixel_count, count_b = self._write_bg_colors(ctx, annotations, progress, start=0.15, end=0.90)
 
         alpha = 0.1
         total_bins = _H_BINS * _S_BINS * _V_BINS
@@ -105,102 +104,17 @@ class Pass3:
         p_b = (count_b + alpha) / (N_b + alpha * total_bins)
         LR = p_s / p_b
         # LR for a bin with no data in either histogram equals this floor value.
-        # Contour levels must start above it to isolate signal-enriched bins.
+        # Bins above this floor are genuinely signal-enriched.
         lr_floor = (N_b + alpha * total_bins) / (N_s + alpha * total_bins)
 
-        progress.update(0.88, "plot", "Writing scatter plots…")
-        self._write_scatter_plot(ctx, rows, x_col="H", y_col="S",
-                                 x_label="Hue (0–180)", y_label="Saturation (0–255)",
-                                 x_lim=(0, 180), y_lim=(0, 255),
-                                 ball_x_idx=3, ball_y_idx=4,
-                                 stem="hue_saturation")
-        self._write_scatter_plot(ctx, [], x_col="H", y_col="S",
-                                 x_label="Hue (0–180)", y_label="Saturation (0–255)",
-                                 x_lim=(0, 180), y_lim=(0, 255),
-                                 ball_x_idx=3, ball_y_idx=4,
-                                 stem="hue_saturation_bg")
-        self._write_scatter_plot(ctx, rows, x_col="V", y_col="S",
-                                 x_label="Value (0–255)", y_label="Saturation (0–255)",
-                                 x_lim=(0, 255), y_lim=(0, 255),
-                                 ball_x_idx=5, ball_y_idx=4,
-                                 stem="value_saturation")
-        self._write_scatter_plot(ctx, [], x_col="V", y_col="S",
-                                 x_label="Value (0–255)", y_label="Saturation (0–255)",
-                                 x_lim=(0, 255), y_lim=(0, 255),
-                                 ball_x_idx=5, ball_y_idx=4,
-                                 stem="value_saturation_bg")
+        np.savez_compressed(ctx.paths.pass_raw_dir / "Pratio.npz",
+                            lr_ratio=(LR / lr_floor).astype(np.float32))
 
-        progress.update(0.95, "pratio", "Writing likelihood ratio plot…")
+        progress.update(0.90, "pratio", "Writing likelihood ratio plot…")
         self._write_pratio_plot(ctx, LR, lr_floor)
 
         progress.update(1.0, "done", f"Sampled {len(rows)} ball pixels, {bg_pixel_count} background pixels")
         return {"ball_pixel_count": len(rows), "bg_pixel_count": bg_pixel_count, "annotation_count": total}
-
-    def _write_scatter_plot(self, ctx: PassContext, ball_rows: list,
-                            x_col: str, y_col: str,
-                            x_label: str, y_label: str,
-                            x_lim: tuple, y_lim: tuple,
-                            ball_x_idx: int, ball_y_idx: int,
-                            stem: str) -> None:
-        """Scatter plot of two color channels: bg pixels in gray, ball pixels in true RGB."""
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        raw_dir = ctx.paths.pass_raw_dir
-
-        # Load bg points for the requested channels (H=col0, S=col1, V=col2).
-        _col = {"H": 0, "S": 1, "V": 2}
-        bg_npz = raw_dir / "bg_colors.npz"
-        bg_x, bg_y = [], []
-        if bg_npz.exists():
-            hsv_arr = np.load(bg_npz)["hsv"]
-            bg_x = hsv_arr[:, _col[x_col]].tolist()
-            bg_y = hsv_arr[:, _col[y_col]].tolist()
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        _BG_CAP = 20_000
-        if bg_x:
-            if len(bg_x) > _BG_CAP:
-                rng = np.random.default_rng(0)
-                idx = rng.choice(len(bg_x), _BG_CAP, replace=False)
-                bg_x = [bg_x[i] for i in idx]
-                bg_y = [bg_y[i] for i in idx]
-            ax.scatter(bg_x, bg_y, s=16, marker="s", color=(0.6, 0.6, 0.6), alpha=0.20, linewidths=0, label="background")
-
-        if ball_rows:
-            ball_x = [r[ball_x_idx] for r in ball_rows]
-            ball_y = [r[ball_y_idx] for r in ball_rows]
-            ball_rgb = [(r[0] / 255, r[1] / 255, r[2] / 255) for r in ball_rows]
-            ax.scatter(ball_x, ball_y, s=4, c=ball_rgb, alpha=1.0, linewidths=0, label="ball")
-
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.set_xlim(*x_lim)
-        ax.set_ylim(*y_lim)
-        ax.legend(markerscale=4, loc="upper right")
-        fig.tight_layout()
-        fig.savefig(str(raw_dir / f"{stem}.png"), dpi=150)
-
-        # Extract axes bounding box in image pixel coordinates (origin top-left).
-        renderer = fig.canvas.get_renderer()
-        bbox = ax.get_window_extent(renderer)
-        fig_w_px, fig_h_px = fig.canvas.get_width_height()
-        mapping = {
-            "image_width":  fig_w_px,
-            "image_height": fig_h_px,
-            "axes_left":    round(bbox.x0),
-            "axes_right":   round(bbox.x1),
-            "axes_top":     round(fig_h_px - bbox.y1),
-            "axes_bottom":  round(fig_h_px - bbox.y0),
-            f"{x_col.lower()}_min": x_lim[0],
-            f"{x_col.lower()}_max": x_lim[1],
-            f"{y_col.lower()}_min": y_lim[0],
-            f"{y_col.lower()}_max": y_lim[1],
-        }
-        (raw_dir / f"{stem}.json").write_text(json.dumps(mapping, indent=2))
-        plt.close(fig)
 
     def _write_bg_colors(self, ctx: PassContext, annotations: dict, progress,
                          start: float = 0.15, end: float = 0.90,
@@ -286,6 +200,7 @@ class Pass3:
         from scipy.ndimage import binary_dilation
         struct = np.ones((3, 3, 1), dtype=bool)   # 8-connected in H×S, isolated in V
         LR_blurred = binary_dilation(LR > lr_floor, structure=struct)
+        np.savez_compressed(ctx.paths.pass_raw_dir / "Pratio_mask.npz", mask=LR_blurred)
 
         fig, axes = plt.subplots(2, 4, figsize=(16, 8))
 
@@ -325,11 +240,7 @@ class Pass3:
         artifacts = []
         for name, typ in [
             ("ball_colors.csv", "csv"), ("bg_colors.npz", "npz"),
-            ("hue_saturation.png", "png"), ("hue_saturation.json", "json"),
-            ("hue_saturation_bg.png", "png"),
-            ("value_saturation.png", "png"), ("value_saturation.json", "json"),
-            ("value_saturation_bg.png", "png"),
-            ("Pratio.png", "png"),
+            ("Pratio.npz", "npz"), ("Pratio_mask.npz", "npz"), ("Pratio.png", "png"),
         ]:
             p = raw_dir / name
             if p.exists():
@@ -337,29 +248,14 @@ class Pass3:
         return artifacts
 
     def validate_corrections(self, payload: dict) -> dict:
-        for key in ("hue_saturation", "value_saturation"):
-            verts = payload.get(key, [])
-            if not isinstance(verts, list):
-                raise ValueError(f"{key} must be a list")
-            for v in verts:
-                if not (isinstance(v, list) and len(v) == 2
-                        and all(isinstance(c, (int, float)) for c in v)):
-                    raise ValueError(f"{key} vertices must be [x, y] numeric pairs")
-        return payload
+        return {}
 
     def build_accepted_output(self, ctx: PassContext, raw_result: dict, corrections: dict | None) -> dict:
         import shutil
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("ball_colors.csv", "bg_colors.npz",
-                     "hue_saturation.png", "hue_saturation.json", "hue_saturation_bg.png",
-                     "value_saturation.png", "value_saturation.json", "value_saturation_bg.png",
-                     "Pratio.png"):
+        for name in ("ball_colors.csv", "bg_colors.npz", "Pratio.npz", "Pratio_mask.npz", "Pratio.png"):
             src = ctx.paths.pass_raw_dir / name
             if src.exists():
                 shutil.copy2(src, accepted_dir / name)
-        if corrections:
-            (accepted_dir / "ball_color_polygons.json").write_text(
-                json.dumps(corrections, indent=2)
-            )
         return raw_result

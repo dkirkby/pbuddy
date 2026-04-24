@@ -140,50 +140,27 @@
             { "type": "setting", "pass": "pass2", "name": "ball_annotations" }
           ]
         },
-        "hue_saturation.png": {
-          "description": "Hue vs Saturation scatter plot; ball pixels rendered in their true RGB colour, background pixels in grey; user draws the ball colour polygon on this image",
+        "Pratio.npz": {
+          "description": "48×48×8 H×S×V array (float32, key 'lr_ratio') of LR/lr_floor values; lr_ratio > 1 identifies signal-enriched bins",
           "depends_on": [
             { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
             { "type": "artifact", "pass": "pass3", "file": "bg_colors.npz" }
           ]
         },
-        "hue_saturation.json": {
-          "description": "Pixel dimensions and H/S axis value ranges for the hue-saturation scatter plot; used to convert user polygon coordinates to colour-space values",
+        "Pratio_mask.npz": {
+          "description": "48×48×8 H×S×V boolean array (key 'mask') marking bins above the empty-bin LR floor after 1-cell morphological dilation in H×S; used by Pass 4 for colour-based ball candidate filtering",
           "depends_on": [
-            { "type": "artifact", "pass": "pass3", "file": "hue_saturation.png" }
-          ]
-        },
-        "value_saturation.png": {
-          "description": "Value vs Saturation scatter plot; same colour scheme as the hue-saturation plot; user draws the second ball colour polygon on this image",
-          "depends_on": [
-            { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
-            { "type": "artifact", "pass": "pass3", "file": "bg_colors.npz" }
-          ]
-        },
-        "value_saturation.json": {
-          "description": "Pixel dimensions and V/S axis value ranges for the value-saturation scatter plot",
-          "depends_on": [
-            { "type": "artifact", "pass": "pass3", "file": "value_saturation.png" }
+            { "type": "artifact", "pass": "pass3", "file": "Pratio.npz" }
           ]
         },
         "Pratio.png": {
-          "description": "4×4 grid of H×S subplots (one per V bin) showing the ball-vs-background likelihood ratio; each cell coloured by its HSV midpoint with log-spaced contours of LR overlaid",
+          "description": "2×4 grid of H×S subplots (one per V bin) showing signal-enriched HSV bins; cells coloured by HSV midpoint, dots mark bins above the empty-bin LR floor after 1-cell morphological dilation",
           "depends_on": [
-            { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
-            { "type": "artifact", "pass": "pass3", "file": "bg_colors.npz" }
+            { "type": "artifact", "pass": "pass3", "file": "Pratio_mask.npz" }
           ]
         }
       },
-      "settings": {
-        "color_polygons": {
-          "description": "Two closed polygons drawn by the user on the scatter plots; pixels whose (H, S) falls inside the hue-saturation polygon AND whose (V, S) falls inside the value-saturation polygon are classified as ball candidates in Pass 4",
-          "type": "object",
-          "schema": {
-            "hue_saturation":   "Array<[x, y]> (pixel coordinates in hue_saturation.png image space)",
-            "value_saturation": "Array<[x, y]> (pixel coordinates in value_saturation.png image space)"
-          }
-        }
-      }
+      "settings": {}
     },
     "pass4": {
       "name": "Ball Detection",

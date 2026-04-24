@@ -120,17 +120,6 @@ export const api = {
       `/api/projects/${projectId}/passes/pass4/raw/detections.json`
     ),
 
-  getPass3PlotMapping: (projectId: string, stem: string) =>
-    get<Record<string, number>>(`/api/projects/${projectId}/passes/pass3/raw/${stem}.json`),
-
-  getPass3Corrections: (projectId: string) =>
-    get<{ ok: boolean; data: { hue_saturation: [number, number][]; value_saturation: [number, number][] } | null }>(
-      `/api/projects/${projectId}/passes/pass3/corrections`
-    ),
-
-  savePass3Corrections: (projectId: string, body: { hue_saturation: [number, number][]; value_saturation: [number, number][] }) =>
-    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass3/corrections`, body),
-
   acceptPass3: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass3/accept`),
 
