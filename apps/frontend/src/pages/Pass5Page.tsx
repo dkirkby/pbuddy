@@ -20,11 +20,33 @@ export default function Pass5Page() {
   const [selectedSegId, setSelectedSegId] = useState<number | null>(null)
   const [hoveredSegId, setHoveredSegId] = useState<number | null>(null)
   const hasEnteredSelectedRef = useRef(false)
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null)
+  const [pendingRectIds, setPendingRectIds] = useState<number[] | null>(null)
+  const isDraggingRef = useRef(false)
+  const wasDraggingRef = useRef(false)
 
   const { data: segData, isLoading } = useQuery({
     queryKey: ['pass5-segments', projectId],
     queryFn: () => api.getPass5Segments(projectId!),
   })
+
+  const { data: savedCorrections } = useQuery({
+    queryKey: ['pass5-corrections', projectId],
+    queryFn: () => api.getPass5Corrections(projectId!),
+  })
+
+  const correctionsLoadedRef = useRef(false)
+  useEffect(() => {
+    if (!savedCorrections || correctionsLoadedRef.current) return
+    correctionsLoadedRef.current = true
+    const ids = savedCorrections.deleted_segment_ids ?? []
+    if (ids.length > 0) {
+      setDeletedIds(new Set(ids))
+      setDeleteHistory(ids)
+    }
+  }, [savedCorrections])
 
   // Pass 1 artifacts for median background image.
   const { data: pass1Artifacts } = useQuery({
@@ -119,6 +141,8 @@ export default function Pass5Page() {
     }
   }, [currentFrame, selectedSegId, segments])
 
+  const pendingRectSet = useMemo(() => new Set(pendingRectIds ?? []), [pendingRectIds])
+
   // Segment paths for polyline rendering.
   const segmentPaths = useMemo(() =>
     segments.map(seg => ({ id: seg.id, highlighted: seg.id === selectedSegId, detections: seg.detections })),
@@ -182,8 +206,59 @@ export default function Pass5Page() {
     })
   }
 
+  const confirmRectDelete = () => {
+    if (!pendingRectIds) return
+    pendingRectIds.forEach(id => deleteSegment(id))
+    setPendingRectIds(null)
+  }
+
+  const toSvgCoords = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current
+    if (!svg) return { x: 0, y: 0 }
+    const r = svg.getBoundingClientRect()
+    return {
+      x: (e.clientX - r.left) * bgWidth / r.width,
+      y: (e.clientY - r.top) * bgHeight / r.height,
+    }
+  }
+
+  const handleSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (pendingRectIds !== null) return
+    isDraggingRef.current = false
+    const pt = toSvgCoords(e)
+    setDragStart(pt)
+    setDragCurrent(pt)
+  }
+
+  const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!dragStart) return
+    isDraggingRef.current = true
+    setDragCurrent(toSvgCoords(e))
+  }
+
+  const handleSvgMouseUp = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!dragStart || !dragCurrent) return
+    const dx = dragCurrent.x - dragStart.x
+    const dy = dragCurrent.y - dragStart.y
+    const isRealDrag = isDraggingRef.current && Math.abs(dx) > 5 && Math.abs(dy) > 5
+    setDragStart(null)
+    setDragCurrent(null)
+    if (!isRealDrag) return
+    wasDraggingRef.current = true
+    setTimeout(() => { wasDraggingRef.current = false }, 0)
+    const x1 = Math.min(dragStart.x, dragCurrent.x)
+    const x2 = Math.max(dragStart.x, dragCurrent.x)
+    const y1 = Math.min(dragStart.y, dragCurrent.y)
+    const y2 = Math.max(dragStart.y, dragCurrent.y)
+    const ids = segments
+      .filter(seg => seg.detections.some(d => d.cx >= x1 && d.cx <= x2 && d.cy >= y1 && d.cy <= y2))
+      .map(seg => seg.id)
+    if (ids.length > 0) setPendingRectIds(ids)
+  }
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setPendingRectIds(null); setDragStart(null); setDragCurrent(null) }
       if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoDelete() }
     }
     window.addEventListener('keydown', handler)
@@ -228,7 +303,7 @@ export default function Pass5Page() {
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
         Magenta circle: ball detection in current frame.
         Cyan polyline: segments containing the current frame or with an endpoint within 8 frames (full segment shown).
-        Click a segment path below to delete it.
+        Click a segment path to delete it. Drag a rectangle on the plot above to select and delete multiple segments.
       </p>
 
       {bgMedianUrl && bgWidth && bgHeight && segments.length > 0 && (
@@ -240,32 +315,80 @@ export default function Pass5Page() {
             style={{ display: 'block', width: '100%', filter: 'grayscale(1) brightness(2.2)', userSelect: 'none' }}
           />
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+            ref={svgRef}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: pendingRectIds ? 'default' : 'crosshair', userSelect: 'none' }}
             viewBox={`0 0 ${bgWidth} ${bgHeight}`}
             preserveAspectRatio="xMidYMid meet"
+            onMouseDown={handleSvgMouseDown}
+            onMouseMove={handleSvgMouseMove}
+            onMouseUp={handleSvgMouseUp}
+            onMouseLeave={() => { setDragStart(null); setDragCurrent(null) }}
           >
+            <rect x={0} y={0} width={bgWidth} height={bgHeight} fill="transparent" />
             {segments.map((seg) => {
               const pts = seg.detections.map(d => `${d.cx},${d.cy}`).join(' ')
-              const hovered = seg.id === hoveredSegId
+              const isPending = pendingRectSet.has(seg.id)
+              const hovered = seg.id === hoveredSegId && !pendingRectIds
+              const stroke = isPending ? '#ffff00' : hovered ? '#cc9900' : '#ff3300'
               return (
                 <polyline
                   key={seg.id}
                   points={pts}
                   fill="none"
-                  stroke={hovered ? '#cc9900' : '#ff3300'}
+                  stroke={stroke}
                   strokeWidth={6}
                   strokeLinejoin="round"
                   strokeLinecap="round"
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => deleteSegment(seg.id)}
-                  onMouseEnter={() => setHoveredSegId(seg.id)}
+                  style={{ cursor: pendingRectIds ? 'default' : 'pointer' }}
+                  onClick={() => { if (!wasDraggingRef.current && !pendingRectIds) deleteSegment(seg.id) }}
+                  onMouseEnter={() => { if (!pendingRectIds) setHoveredSegId(seg.id) }}
                   onMouseLeave={() => setHoveredSegId(null)}
                 >
                   <title>Segment {seg.id + 1} — click to delete</title>
                 </polyline>
               )
             })}
+            {dragStart && dragCurrent && (() => {
+              const x = Math.min(dragStart.x, dragCurrent.x)
+              const y = Math.min(dragStart.y, dragCurrent.y)
+              const w = Math.abs(dragCurrent.x - dragStart.x)
+              const h = Math.abs(dragCurrent.y - dragStart.y)
+              return (
+                <rect x={x} y={y} width={w} height={h}
+                  fill="rgba(255,255,0,0.12)" stroke="#ffff00" strokeWidth={2}
+                  strokeDasharray="10 5" pointerEvents="none" />
+              )
+            })()}
           </svg>
+          {pendingRectIds && (
+            <div style={{
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(0,0,0,0.45)',
+            }}>
+              <div style={{
+                background: '#fff', borderRadius: 8, padding: '24px 32px', boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+                textAlign: 'center', minWidth: 260,
+              }}>
+                <div style={{ fontSize: 15, marginBottom: 20 }}>
+                  Delete <strong>{pendingRectIds.length}</strong> segment{pendingRectIds.length !== 1 ? 's' : ''} in selection?
+                </div>
+                <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                  <button
+                    onClick={confirmRectDelete}
+                    style={{ padding: '6px 20px', background: '#c00', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Delete {pendingRectIds.length}
+                  </button>
+                  <button
+                    onClick={() => setPendingRectIds(null)}
+                    style={{ padding: '6px 20px', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

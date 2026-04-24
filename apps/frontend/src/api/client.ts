@@ -94,6 +94,9 @@ export const api = {
   runPass5: (projectId: string) =>
     post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass5/run`),
 
+  getPass5Corrections: (projectId: string) =>
+    get<{ deleted_segment_ids: number[] }>(`/api/projects/${projectId}/passes/pass5/corrections`),
+
   savePass5Corrections: (projectId: string, deletedSegmentIds: number[]) =>
     put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/corrections`, { deleted_segment_ids: deletedSegmentIds }),
 

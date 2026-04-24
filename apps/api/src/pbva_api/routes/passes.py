@@ -979,6 +979,18 @@ def get_pass5_raw_file(
     return JSONResponse(content=json.loads(path.read_text()))
 
 
+@router.get("/{project_id}/passes/pass5/corrections")
+def get_pass5_corrections(
+    project_id: str,
+    settings=Depends(get_settings),
+):
+    from pbva_core import paths as p
+    corrections_path = p.pass_corrections_dir(settings.data_root, project_id, "pass5") / "corrections.json"
+    if not corrections_path.exists():
+        return {"deleted_segment_ids": []}
+    return json.loads(corrections_path.read_text())
+
+
 @router.put("/{project_id}/passes/pass5/corrections")
 def save_pass5_corrections(
     project_id: str,
