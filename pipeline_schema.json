@@ -183,7 +183,7 @@
           ]
         },
         "patches/NNNNNN.png": {
-          "description": "64×64 px composite diagnostic patch for each annotated frame; R=motion mask, G=3-D LR colour mask, B=tent silhouette; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
+          "description": "64×64 px composite diagnostic patch for each annotated frame; R=motion, G=color, B=tent, M=!color, C=!motion; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
           "depends_on": [
             { "type": "source_video" },
             { "type": "artifact", "pass": "pass1", "file": "tent_mask.png" },

@@ -14,48 +14,17 @@ from pbva_pipeline.base import PassContext
 # Must match Pass 3 histogram bin counts.
 _H_BINS, _S_BINS, _V_BINS = 48, 48, 8
 
-# Per-frame median background — must match Pass 3 _write_bg_colors parameters.
-_GAP    = 15
-_SPAN   = 5
-_N_SIDE = 15
-_MEDIAN_OFFSETS = sorted(
-    [-_GAP - k * _SPAN for k in range(_N_SIDE)] +
-    [ _GAP + k * _SPAN for k in range(_N_SIDE)]
-)
-# Gap-zone offsets: multiples of _SPAN strictly inside the gap (±5, ±10, 0).
-_GAP_OFFSETS = sorted(k * _SPAN for k in range(-(_GAP // _SPAN - 1), _GAP // _SPAN))
+# Background median is computed from every BG_SUBSAMPLE-th frame in a sliding window of
+# CHUNK_SIZE frames. The same median is used for all detection frames in that chunk.
+CHUNK_SIZE   = 120
+BG_SUBSAMPLE = 10
 
 
-def _fetch_frame(
-    cap: cv2.VideoCapture, fi: int, cache: dict[int, np.ndarray], total_frames: int
-) -> np.ndarray | None:
-    """Return decoded frame fi using/populating cache. Returns None if out of bounds or read fails."""
-    if fi in cache:
-        return cache[fi]
-    if not (0 <= fi < total_frames):
-        return None
-    cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
-    ok, frame = cap.read()
-    if ok:
-        cache[fi] = frame
-    return frame if ok else None
-
-
-def _compute_median(cache: dict[int, np.ndarray], center: int, total_frames: int) -> np.ndarray | None:
-    frames = [cache[center + o] for o in _MEDIAN_OFFSETS
-              if 0 <= center + o < total_frames and (center + o) in cache]
-    if not frames:
-        return None
-    return np.median(np.stack(frames, axis=0), axis=0).astype(np.uint8)
-
-
-def detect_motion(frame, bg_blur, close_kernel, blur=3, threshold=25):
-    frame_blur = cv2.medianBlur(frame, blur)
-    diff = cv2.absdiff(frame_blur, bg_blur)
+def detect_motion(frame, bg, close_kernel, threshold=20):
+    diff = cv2.absdiff(frame, bg)
     motion = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
     _, moving = cv2.threshold(motion, threshold, 255, cv2.THRESH_BINARY)
-    moving = cv2.medianBlur(moving, 3)
-    solid  = cv2.morphologyEx(moving, cv2.MORPH_CLOSE, close_kernel)
+    solid = cv2.morphologyEx(moving, cv2.MORPH_CLOSE, close_kernel)
     return solid
 
 
@@ -146,32 +115,39 @@ class Pass4:
         s_scale = _S_BINS / 256.0
         v_scale = _V_BINS / 256.0
 
-        # Outer loop over rally intervals; for each rally run _SPAN strided sub-loops.
-        # Non-rally frames are skipped entirely — no cache maintenance needed between rallies
-        # because each sub-loop bootstraps a fresh cache at its first frame.
-        step = 0  # global step counter for pause/progress throttling
+        step = 0
 
         for rally_start, rally_end in rally_intervals:
-            for stride_start in range(_SPAN):
-                stride_targets = list(range(rally_start + stride_start, rally_end + 1, _SPAN))
-                if not stride_targets:
-                    continue
+            chunk_start = rally_start
 
+            cap.set(cv2.CAP_PROP_POS_FRAMES, chunk_start)
+            read_head = chunk_start
+
+            while chunk_start <= rally_end:
+                chunk_bg_end = min(chunk_start + CHUNK_SIZE - 1, video_total_frames - 1)
+                detect_end   = min(chunk_start + CHUNK_SIZE - 1, rally_end)
+
+                # Read the full 120-frame chunk (or up to video end) sequentially.
                 frame_cache: dict[int, np.ndarray] = {}
+                while read_head <= chunk_bg_end:
+                    ok, frm = cap.read()
+                    if ok:
+                        frame_cache[read_head] = frm
+                    read_head += 1
 
-                for loop_idx, T in enumerate(stride_targets):
-                    if loop_idx == 0:
-                        # Bootstrap: seed cache with all median-offset and gap-zone frames.
-                        for fi in ([T + o for o in _MEDIAN_OFFSETS] +
-                                   [T + o for o in _GAP_OFFSETS]):
-                            _fetch_frame(cap, fi, frame_cache, video_total_frames)
-                    else:
-                        # Incremental update: evict the one frame that left the far-negative
-                        # end of the median window, read the one frame that entered the far-
-                        # positive end. All other needed frames are already in cache.
-                        frame_cache.pop((T - _SPAN) + _MEDIAN_OFFSETS[0], None)
-                        _fetch_frame(cap, T + _MEDIAN_OFFSETS[-1], frame_cache, video_total_frames)
+                # Compute median from every BG_SUBSAMPLE-th frame in the chunk.
+                samples = [
+                    frame_cache[f]
+                    for f in range(chunk_start, chunk_bg_end + 1, BG_SUBSAMPLE)
+                    if f in frame_cache
+                ]
+                if not samples:
+                    chunk_start = detect_end + 1
+                    continue
+                median_bgr = np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
 
+                # Detect balls only in frames up to the rally end.
+                for T in range(chunk_start, detect_end + 1):
                     in_rally_processed += 1
                     step += 1
                     frac = in_rally_processed / total_rally_frames if total_rally_frames else 0
@@ -208,14 +184,8 @@ class Pass4:
                     if frame is None:
                         continue
 
-                    # --- Per-frame median background ---
-                    median_bgr = _compute_median(frame_cache, T, video_total_frames)
-                    if median_bgr is None:
-                        continue
-                    bg_blur = cv2.medianBlur(median_bgr, 3)
-
                     # --- Motion mask ---
-                    motion_mask = detect_motion(frame, bg_blur, close_kernel)
+                    motion_mask = detect_motion(frame, median_bgr, close_kernel)
 
                     # --- Color mask: vectorized 3D LR_blurred lookup ---
                     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -245,7 +215,7 @@ class Pass4:
                                 "perimeter": round(perimeter, 1),
                             })
 
-                    # --- Annotation patch: 64×64 RGB with R=motion, G=color, B=tent ---
+                    # --- Annotation patch: 64×64 with R=motion, G=color, B=tent ---
                     # Annotation keys are browser frame numbers (= frame_idx + 1).
                     ann_key = T + 1
                     if ann_key in ann_by_frame:
@@ -261,10 +231,9 @@ class Pass4:
                         patch[dy1:dy2, dx1:dx2, 0] = tent_mask[sy1:sy2, sx1:sx2]    # B
                         cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
 
-        cap.release()
+                chunk_start = detect_end + 1
 
-        # Strides interleave frame order within each rally; restore chronological order.
-        detections.sort(key=lambda d: d["frame"])
+        cap.release()
 
         # Build a B&W map of all detection locations at tent-mask resolution.
         det_map = np.zeros((bg_h, bg_w), dtype=np.uint8)
