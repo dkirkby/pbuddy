@@ -247,10 +247,18 @@ def _build_score_overlay(
 
     # ---- Players ----
     # Initial team membership from player_names.
-    sv_a = player_names.get("serving_team_left", "?")    # initial serving-team player A
-    sv_b = player_names.get("serving_team_right", "?")   # initial serving-team player B
-    rv_a = player_names.get("receiving_team_right", "?") # initial receiving-team player A
-    rv_b = player_names.get("receiving_team_left", "?")  # initial receiving-team player B
+    # Support both old keys (serving_team_*) and new keys (far_team_* / near_team_*).
+    far_first = player_names.get("far_team_serves_first", True)
+    if far_first:
+        sv_a = player_names.get("far_team_left",  player_names.get("serving_team_left",  "?"))
+        sv_b = player_names.get("far_team_right", player_names.get("serving_team_right", "?"))
+        rv_a = player_names.get("near_team_right", player_names.get("receiving_team_right", "?"))
+        rv_b = player_names.get("near_team_left",  player_names.get("receiving_team_left",  "?"))
+    else:
+        sv_a = player_names.get("near_team_left",  player_names.get("receiving_team_left",  "?"))
+        sv_b = player_names.get("near_team_right", player_names.get("receiving_team_right", "?"))
+        rv_a = player_names.get("far_team_right", player_names.get("serving_team_right", "?"))
+        rv_b = player_names.get("far_team_left",  player_names.get("serving_team_left",  "?"))
     initial_sv_set = frozenset({sv_a, sv_b})
 
     current_server = rally.get("serverName", "")
@@ -734,10 +742,17 @@ class Pass6:
         # across all subsequent rallies until the next side out.  This stops
         # the receiving team's display order flipping rally-to-rally due to
         # diagonal-receiver changes while the same team keeps serving.
-        _initial_sv_set = frozenset({
-            player_names.get("serving_team_left", ""),
-            player_names.get("serving_team_right", ""),
-        })
+        _far_first = player_names.get("far_team_serves_first", True)
+        if _far_first:
+            _initial_sv_set = frozenset({
+                player_names.get("far_team_left",  player_names.get("serving_team_left",  "")),
+                player_names.get("far_team_right", player_names.get("serving_team_right", "")),
+            })
+        else:
+            _initial_sv_set = frozenset({
+                player_names.get("near_team_left",  player_names.get("receiving_team_left",  "")),
+                player_names.get("near_team_right", player_names.get("receiving_team_right", "")),
+            })
         _stable_rv_first: list[str] = []
         _cur_rv_first = ""
         _prev_serving_initial = None

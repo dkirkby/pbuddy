@@ -86,10 +86,10 @@ export interface BallAnnotation {
 }
 
 export interface PlayerNames {
-  serving_team_right: string
-  serving_team_left: string
-  receiving_team_right: string
-  receiving_team_left: string
+  far_team_right: string
+  far_team_left: string
+  near_team_right: string
+  near_team_left: string
 }
 
 export interface RallyRecord {
@@ -105,6 +105,7 @@ export interface Pass2Corrections {
   annotations: Record<string, BallAnnotation>
   patches: Record<string, string>  // frameIndex → PNG data URL
   player_names?: PlayerNames
+  far_team_serves_first?: boolean | null
   rally?: RallyRecord[]
 }
 

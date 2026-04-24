@@ -2,13 +2,14 @@ export class PickleballDoublesGame {
   /**
    * Track the state of a standard doubles pickleball game.
    *
-   * Constructor arguments are the player names in this order:
-   *   1. Right-hand player on team A at the start of the game
-   *      (and the player who serves first)
-   *   2. Left-hand player on team A at the start of the game
-   *   3. Right-hand player on team B at the start of the game
-   *      (and the player who receives first)
-   *   4. Left-hand player on team B at the start of the game
+   * Players are identified by their camera-relative position at the start of the game:
+   *   farRight, farLeft  — the two players on the far side of the court (from camera)
+   *   nearRight, nearLeft — the two players on the near side
+   *
+   * farTeamServesFirst determines which side serves first. The opening-turn rule
+   * (first serving team gets only one serve before a side-out) applies regardless.
+   *
+   * Internally team 0 = the team that serves first, team 1 = the team that receives first.
    */
   private _teams: [[string, string], [string, string]]
   private _score: [number, number]
@@ -19,17 +20,21 @@ export class PickleballDoublesGame {
   // Which teams[team] index is "player 1" for the current service turn.
   // Set to rightIndex[team] at each side-out — the player on the RH side starts serving.
   private _player1Index: [number, number]
+  readonly farTeamIsTeam0: boolean
 
   constructor(
-    teamARightFirstServer: string,
-    teamALeftFirstServer: string,
-    teamBRightFirstReceiver: string,
-    teamBLeftFirstReceiver: string,
+    farRight: string,
+    farLeft: string,
+    nearRight: string,
+    nearLeft: string,
+    farTeamServesFirst: boolean = true,
   ) {
-    this._teams = [
-      [teamARightFirstServer, teamALeftFirstServer],
-      [teamBRightFirstReceiver, teamBLeftFirstReceiver],
-    ]
+    this.farTeamIsTeam0 = farTeamServesFirst
+    if (farTeamServesFirst) {
+      this._teams = [[farRight, farLeft], [nearRight, nearLeft]]
+    } else {
+      this._teams = [[nearRight, nearLeft], [farRight, farLeft]]
+    }
     this._score = [0, 0]
     this._servingTeam = 0
     this._servingPlayer = 2

@@ -170,26 +170,25 @@
           "depends_on": [
             { "type": "source_video" },
             { "type": "artifact", "pass": "pass1", "file": "result.json" },
-            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
             { "type": "setting", "pass": "pass1", "name": "court_corners" },
             { "type": "setting", "pass": "pass2", "name": "rally_records" },
             { "type": "setting", "pass": "pass2", "name": "ball_annotations" },
-            { "type": "setting", "pass": "pass3", "name": "color_polygons" }
+            { "type": "artifact", "pass": "pass3", "file": "Pratio_mask.npz" }
           ]
         },
         "detections_map.png": {
-          "description": "Binary image at background plate resolution; white pixel at every detection centre; useful for inspecting the spatial distribution of all detections across the full video",
+          "description": "Binary image at tent-mask resolution; white pixel at every detection centre; useful for inspecting the spatial distribution of all detections across the full video",
           "depends_on": [
             { "type": "artifact", "pass": "pass4", "file": "detections.json" }
           ]
         },
         "patches/NNNNNN.png": {
-          "description": "64×64 px composite diagnostic patch for each annotated frame; R channel = motion mask, G = hue-saturation colour mask, B = value-saturation colour mask; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
+          "description": "64×64 px composite diagnostic patch for each annotated frame; R=motion mask, G=3-D LR colour mask, B=tent silhouette; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
           "depends_on": [
             { "type": "source_video" },
-            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
+            { "type": "artifact", "pass": "pass1", "file": "tent_mask.png" },
             { "type": "setting", "pass": "pass2", "name": "ball_annotations" },
-            { "type": "setting", "pass": "pass3", "name": "color_polygons" }
+            { "type": "artifact", "pass": "pass3", "file": "Pratio_mask.npz" }
           ]
         }
       },

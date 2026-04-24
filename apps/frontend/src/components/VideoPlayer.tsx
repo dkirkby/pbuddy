@@ -70,6 +70,7 @@ const CIRCLE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(_cursorSvg)}
 
 export interface VideoPlayerHandle {
   seekToFrame: (frameIndex: number) => void
+  play: () => void
 }
 
 type PlaybackState = 'stopped' | 'playing' | 'fast-forward' | 'fast-reverse'
@@ -231,6 +232,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
   useImperativeHandle(ref, () => ({
     seekToFrame: (fi) => {
       if (videoRef.current) videoRef.current.currentTime = fi / fpsRef.current
+    },
+    play: () => {
+      if (videoRef.current) {
+        videoRef.current.play().catch(() => {})
+        setPlaybackState('playing')
+      }
     },
   }))
 

@@ -27,12 +27,16 @@ export default function Pass4Page() {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       navigate(`/projects/${projectId}`)
     },
+    onError: () => setAccepting(false),
+    onSettled: () => setAccepting(false),
   })
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => api.getProject(projectId!),
   })
+
+  const pass4State = project?.passes.find((p) => p.pass_name === 'pass4')?.state
 
   const { data: detectionsData, isLoading } = useQuery({
     queryKey: ['pass4-detections', projectId],
@@ -147,11 +151,14 @@ export default function Pass4Page() {
             )}
           </div>
           <button
-            onClick={() => { setAccepting(true); acceptPass4.mutate() }}
+            onClick={() => {
+              if (pass4State === 'accepted') { navigate(`/projects/${projectId}`); return }
+              setAccepting(true); acceptPass4.mutate()
+            }}
             disabled={accepting || acceptPass4.isPending || !detectionsData}
-            style={{ padding: '6px 18px', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+            style={{ padding: '6px 18px', background: pass4State === 'accepted' ? '#555' : '#0a0', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
           >
-            {accepting ? 'Accepting…' : 'Accept Pass 4 →'}
+            {pass4State === 'accepted' ? 'Already accepted ←' : accepting ? 'Accepting…' : 'Accept Pass 4 →'}
           </button>
         </div>
       </div>

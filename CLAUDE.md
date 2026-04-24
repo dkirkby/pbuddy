@@ -20,7 +20,7 @@ All court geometry and ball physical properties are defined in **`dimensions.jso
 
 ## Technology Stack
 
-**Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`); monorepo workspace packages: `pbva-core`, `pbva-db`, `pbva-pipeline`, `pbva-api`, `pbva-worker`
+**Backend:** Python with FastAPI + Uvicorn, managed via `uv` (`pyproject.toml` + `uv.lock`); monorepo workspace — `packages/` holds pure libraries (`pbva-core`, `pbva-db`, `pbva-pipeline`), `apps/` holds executables (`pbva-api`, `pbva-worker`, `frontend`)
 
 **Frontend:** React + TypeScript + Vite, with TanStack Query, Zustand, Canvas/SVG overlays
 
@@ -54,6 +54,13 @@ uv run pytest tests/path/to/test_file.py::test_name
 
 # Run the slow smoke test on test.mp4
 uv run pytest tests/integration/test_pass1_smoke.py -m slow -v -s
+
+# Lint and format (ruff is configured in pyproject.toml, line-length=100, target py312)
+uv run ruff check .
+uv run ruff format .
+
+# Type-check
+uv run mypy packages/ apps/
 ```
 
 ## Architecture Overview
@@ -140,6 +147,23 @@ POST   /api/projects/{id}/passes/{pass}/accept
 - `Pass4Page` — detection reviewer (video player with per-frame ball detection overlay)
 - `Pass5Page` — segment reviewer (video player with detection + segment polyline overlays)
 - `Pass6Page` — export reviewer (rally table with output timestamps, download link, copyable YouTube chapter timestamps, accept button)
+
+### Monorepo Package Roles
+
+- **`pbva-core`** (`packages/core`) — shared primitives: `Settings` (config), `PassPaths` (artifact path builder), `enums` (pass states, job states), `types`, `errors` (`WorkerCancelled`), `dimensions` (loads `dimensions.json`)
+- **`pbva-db`** (`packages/db`) — SQLAlchemy models and DB engine; single source of truth for the schema
+- **`pbva-pipeline`** (`packages/pipeline`) — one subpackage per pass (`pass1/`…`pass6/`), each with `run.py`; `base.py` defines `PassPaths`, `ProgressReporter` protocol, and `NullProgress`
+- **`pbva-api`** (`apps/api`) — FastAPI routes (`routes/projects.py`, `passes.py`, `artifacts.py`, `jobs.py`) + `websocket_manager.py` for broadcasting events
+- **`pbva-worker`** (`apps/worker`) — `worker_loop.py` polls the job queue; `job_claiming.py` atomically claims a job; `execution_context.py` wraps pass execution with progress reporting and cancellation; `progress.py` writes events to the DB for WebSocket streaming
+
+**`pipeline_schema.json`** at the repo root is the authoritative artifact dependency graph. It lists every raw artifact produced per pass, which upstream artifacts and user settings each depends on, and which user-editable settings exist per pass. The dirty-flag invalidation logic reads this file to determine which downstream artifacts must be re-run when a pass is re-run or corrections change.
+
+### Frontend Module Roles
+
+- `src/api/client.ts` — typed fetch wrappers for all REST endpoints; `src/api/ws.ts` — WebSocket subscription hook
+- `src/state/editorStore.ts` — Zustand store shared across pass editor pages (correction data, dirty flags)
+- `src/components/VideoPlayer.tsx` — reusable player with `requestVideoFrameCallback` loop and overlay canvas; `CourtOverlay.tsx` — SVG court geometry editor
+- `src/lib/courtCamera.ts` — court↔camera homography math; `src/lib/dimensions.ts` — JS-side court dimensions loaded from `dimensions.json`; `src/lib/PickleballDoublesGame.ts` — game state helpers
 
 ### Challenge Dataset
 

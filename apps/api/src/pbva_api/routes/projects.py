@@ -38,10 +38,11 @@ def _pass_runnable(project_id: str, pass_name: str, data_root: Path) -> bool:
             and (accepted("pass2") / "patches" / "raw").exists()
         )
     if pass_name == "pass4":
+        raw = lambda pass_n: p.pass_raw_dir(data_root, project_id, pass_n)
         return (
             (accepted("pass1") / "tent_mask.png").exists()
             and (accepted("pass2") / "rally.json").exists()
-            and (accepted("pass3") / "ball_color_polygons.json").exists()
+            and (raw("pass3") / "Pratio_mask.npz").exists()
         )
     if pass_name == "pass5":
         return (accepted("pass4") / "detections.json").exists()
