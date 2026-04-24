@@ -132,19 +132,19 @@
             { "type": "setting", "pass": "pass2", "name": "ball_annotations" }
           ]
         },
-        "bg_colors.csv": {
-          "description": "R, G, B, H, S, V channel values sampled from pixels in the first median background image that fall within the court silhouette (tent) mask; the background image path is read from pass1/raw/result.json (median_background_paths[0])",
+        "bg_colors.npz": {
+          "description": "H, S, V channel values (numpy compressed, key 'hsv', shape Nx3 uint8) sampled from tent-masked pixels of per-annotation local median images computed from frames surrounding each Pass 2 annotation frame",
           "depends_on": [
-            { "type": "artifact", "pass": "pass1", "file": "result.json" },
-            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
-            { "type": "setting", "pass": "pass1", "name": "court_corners" }
+            { "type": "source_video" },
+            { "type": "artifact", "pass": "pass1", "file": "tent_mask.png" },
+            { "type": "setting", "pass": "pass2", "name": "ball_annotations" }
           ]
         },
         "hue_saturation.png": {
           "description": "Hue vs Saturation scatter plot; ball pixels rendered in their true RGB colour, background pixels in grey; user draws the ball colour polygon on this image",
           "depends_on": [
             { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
-            { "type": "artifact", "pass": "pass3", "file": "bg_colors.csv" }
+            { "type": "artifact", "pass": "pass3", "file": "bg_colors.npz" }
           ]
         },
         "hue_saturation.json": {
@@ -157,13 +157,20 @@
           "description": "Value vs Saturation scatter plot; same colour scheme as the hue-saturation plot; user draws the second ball colour polygon on this image",
           "depends_on": [
             { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
-            { "type": "artifact", "pass": "pass3", "file": "bg_colors.csv" }
+            { "type": "artifact", "pass": "pass3", "file": "bg_colors.npz" }
           ]
         },
         "value_saturation.json": {
           "description": "Pixel dimensions and V/S axis value ranges for the value-saturation scatter plot",
           "depends_on": [
             { "type": "artifact", "pass": "pass3", "file": "value_saturation.png" }
+          ]
+        },
+        "Pratio.png": {
+          "description": "4×4 grid of H×S subplots (one per V bin) showing the ball-vs-background likelihood ratio; each cell coloured by its HSV midpoint with log-spaced contours of LR overlaid",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass3", "file": "ball_colors.csv" },
+            { "type": "artifact", "pass": "pass3", "file": "bg_colors.npz" }
           ]
         }
       },
