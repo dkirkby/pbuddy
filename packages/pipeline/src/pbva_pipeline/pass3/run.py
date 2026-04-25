@@ -31,7 +31,7 @@ class Pass3:
         if not ann_path.exists():
             raise FileNotFoundError(f"Pass 2 annotations not found: {ann_path}")
 
-    def run(self, ctx: PassContext, progress=None):
+    def run(self, ctx: PassContext, progress=None, nbg_nsig_ratio: int = 100):
         if progress is None:
             from pbva_pipeline.base import NullProgress
             progress = NullProgress()
@@ -52,9 +52,10 @@ class Pass3:
 
         total = len(annotations)
         rows = []
+        n_sig_per_frame: dict[str, int] = {}
 
         for idx, (frame_key, ann) in enumerate(annotations.items()):
-            progress.update(0.05 + 0.85 * idx / max(total, 1), "sampling", f"Sampling frame {frame_key}…")
+            progress.update(0.05 + 0.40 * idx / max(total, 1), "sampling", f"Sampling frame {frame_key}…")
 
             patch_path = patch_files.get(frame_key)
             if patch_path is None:
@@ -74,6 +75,7 @@ class Pass3:
             # Convert entire patch to HSV once (H: 0–180, S: 0–255, V: 0–255).
             hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
 
+            n_sig = 0
             for py in range(h):
                 for px in range(w):
                     dist = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
@@ -81,8 +83,10 @@ class Pass3:
                         b, g, r = int(bgr[py, px, 0]), int(bgr[py, px, 1]), int(bgr[py, px, 2])
                         hv, sv, vv = int(hsv[py, px, 0]), int(hsv[py, px, 1]), int(hsv[py, px, 2])
                         rows.append((r, g, b, hv, sv, vv))
+                        n_sig += 1
+            n_sig_per_frame[frame_key] = n_sig
 
-        progress.update(0.90, "writing", "Writing ball_colors.csv…")
+        progress.update(0.45, "writing", "Writing ball_colors.csv…")
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["R", "G", "B", "H", "S", "V"])
@@ -94,40 +98,109 @@ class Pass3:
         else:
             count_s = np.zeros((_H_BINS, _S_BINS, _V_BINS))
 
-        mask = count_s > 0
-        mask = self._clean_hsvmask(mask)
+        progress.update(0.50, "bg", "Sampling background pixels…")
+        count_b = self._sample_bg_colors(ctx, annotations, n_sig_per_frame, rmin, progress,
+                                         start=0.50, end=0.88, nbg_nsig_ratio=nbg_nsig_ratio)
+
+        from scipy.ndimage import gaussian_filter
+        count_s_smooth = gaussian_filter(count_s, sigma=(0.5, 0.5, 0))
+        count_b_smooth = gaussian_filter(count_b, sigma=(0.5, 0.5, 0))
+        prob_s = count_s_smooth / max(count_s_smooth.sum(), 1.0)
+        prob_b = count_b_smooth / max(count_b_smooth.sum(), 1.0)
+
+        npix_f = p2.bg_width * p2.bg_height
+        npix_s = float(np.mean(list(n_sig_per_frame.values()))) if n_sig_per_frame else 1.0
+        prior_ratio = (npix_f - npix_s) / npix_s
+        post_sig = prob_s / np.where(prob_s + prob_b * prior_ratio > 0,
+                                     prob_s + prob_b * prior_ratio, 1.0)
+        post_sig[prob_s == 0] = 0.0
+
+        mask = post_sig > 0.1
         np.savez_compressed(raw_dir / "HSVmask.npz", mask=mask)
 
-        progress.update(0.95, "plot", "Writing HSV mask plot…")
-        self._write_hsvmask_plot(ctx, mask)
+        progress.update(0.92, "plot", "Writing HSV plots…")
+        self._write_hsvsig_plot(ctx, prob_s, mask=mask)
+        self._write_hsvsig_plot(ctx, prob_b, mask=mask, filename="HSVbg.png",
+                                title="HSV Background Counts — hollow square area ∝ n_bg")
+        self._write_hsvsig_plot(ctx, post_sig, filename="HSVprob.png",
+                                title="P(sig|HSV) — Bayesian posterior probability")
+        self._write_hsvprob_hist(ctx, post_sig)
 
         progress.update(1.0, "done", f"Sampled {len(rows)} ball pixels across {total} annotations")
         return {"ball_pixel_count": len(rows), "annotation_count": total}
 
-    def _clean_hsvmask(self, mask: np.ndarray) -> np.ndarray:
-        """Per V-bin: remove isolated single-cell dots, then close gaps with 5×5."""
-        from scipy.ndimage import label, binary_closing
-        close_struct = np.ones((5, 5), dtype=bool)
-        result = np.zeros_like(mask)
-        for v in range(_V_BINS):
-            sl = mask[:, :, v]
-            labeled, _ = label(sl, structure=np.ones((3, 3), dtype=bool))
-            sizes = np.bincount(labeled.ravel())
-            # Remove components of size 1 (isolated single cells).
-            keep = sizes > 1
-            keep[0] = False  # background label
-            sl = keep[labeled]
-            result[:, :, v] = binary_closing(sl, structure=close_struct)
-        return result
+    def _sample_bg_colors(self, ctx: PassContext, annotations: dict,
+                          n_sig_per_frame: dict[str, int], rmin: float,
+                          progress, start: float, end: float,
+                          nbg_nsig_ratio: int = 100) -> np.ndarray:
+        """For each annotated frame, randomly sample 20*N pixels outside 2*R exclusion circle."""
+        rng = np.random.default_rng(seed=42)
+        total = len(annotations)
+        all_hsv: list[np.ndarray] = []
 
-    def _write_hsvmask_plot(self, ctx: PassContext, mask: np.ndarray) -> None:
-        """4×4 grid of H×S subplots (one per V bin) showing signal-present HSV cells."""
+        cap = cv2.VideoCapture(str(ctx.video_path))
+        try:
+            for idx, (frame_key, ann) in enumerate(annotations.items()):
+                progress.update(start + (end - start) * idx / max(total, 1),
+                                 "bg", f"Background sampling frame {frame_key}…")
+                n_sig = n_sig_per_frame.get(frame_key, 0)
+                if n_sig == 0:
+                    continue
+
+                cx = ann.get("x", 0) if isinstance(ann, dict) else 0
+                cy = ann.get("y", 0) if isinstance(ann, dict) else 0
+                ann_radius = ann.get("radius", 0) if isinstance(ann, dict) else 0
+                excl_radius = 2.0 * (ann_radius if ann_radius > 0 else rmin)
+
+                frame_idx = int(frame_key) - 1  # browser → OpenCV
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+
+                fh, fw = frame.shape[:2]
+                ys, xs = np.mgrid[0:fh, 0:fw]
+                dist2 = (xs - cx) ** 2 + (ys - cy) ** 2
+                outside = dist2 > excl_radius ** 2
+                cand_y = ys[outside]
+                cand_x = xs[outside]
+
+                n_want = nbg_nsig_ratio * n_sig
+                n_avail = len(cand_y)
+                if n_avail == 0:
+                    continue
+                chosen = rng.choice(n_avail, size=min(n_want, n_avail), replace=False)
+
+                frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                all_hsv.append(frame_hsv[cand_y[chosen], cand_x[chosen]])
+        finally:
+            cap.release()
+
+        if all_hsv:
+            bg_hsv = np.concatenate(all_hsv, axis=0).astype(np.float32)
+            count_b, _ = np.histogramdd(bg_hsv, bins=[_H_EDGES, _S_EDGES, _V_EDGES])
+        else:
+            count_b = np.zeros((_H_BINS, _S_BINS, _V_BINS))
+        return count_b
+
+    def _write_hsvsig_plot(self, ctx: PassContext, count_s: np.ndarray,
+                           filename: str = "HSVsig.png",
+                           title: str = "HSV Signal Counts — hollow square area ∝ n_sig",
+                           mask: np.ndarray | None = None) -> None:
+        """2×4 grid of H×S subplots (one per V bin); hollow squares scaled by count.
+
+        If mask is provided, contours at the bin-edge boundaries of masked regions are
+        superimposed. Contours follow bin edges exactly (no interpolation smoothing).
+        """
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-
         h_mids = (np.arange(_H_BINS) + 0.5) * 180.0 / _H_BINS
         s_mids = (np.arange(_S_BINS) + 0.5) * 256.0 / _S_BINS
+        h_step = 180.0 / _H_BINS   # cell width in data units
+        s_step = 256.0 / _S_BINS   # cell height in data units
+
+        max_count = float(count_s.max()) if count_s.max() > 0 else 1.0
 
         fig, axes = plt.subplots(2, 4, figsize=(16, 8))
 
@@ -144,20 +217,73 @@ class Pass3:
             ax.imshow(rgb_img, origin="lower", extent=[0, 180, 0, 255],
                       aspect="auto", interpolation="nearest")
 
-            dot_color = "white" if v_mid < 128 else "black"
-            h_idx, s_idx = np.where(mask[:, :, v_idx])
+            h_idx, s_idx = np.where(count_s[:, :, v_idx] > 0)
             if h_idx.size:
-                ax.scatter(h_mids[h_idx], s_mids[s_idx],
-                           s=4, c=dot_color, linewidths=0)
+                counts = count_s[h_idx, s_idx, v_idx]
+                # Square half-side in data units, scaled so max count fills the cell.
+                # Area of square = (2*half)^2; we want area proportional to count.
+                # At max count, half = h_step/2 (fills cell width).
+                max_half_h = h_step / 2.0
+                max_half_s = s_step / 2.0
+                scale = np.sqrt(counts / max_count)
+                half_h = scale * max_half_h
+                half_s = scale * max_half_s
+
+                cx = h_mids[h_idx]
+                cy = s_mids[s_idx]
+                dot_color = "white" if v_mid < 128 else "black"
+                for x, y, dh, ds in zip(cx, cy, half_h, half_s):
+                    rect = plt.Rectangle((x - dh, y - ds), 2 * dh, 2 * ds,
+                                         linewidth=0.8, edgecolor=dot_color,
+                                         facecolor="none")
+                    ax.add_patch(rect)
+
+            if mask is not None:
+                sl = mask[:, :, v_idx]
+                if sl.any():
+                    from matplotlib.collections import LineCollection
+                    h_edges = np.arange(_H_BINS + 1) * (180.0 / _H_BINS)
+                    s_edges = np.arange(_S_BINS + 1) * (256.0 / _S_BINS)
+                    padded = np.pad(sl, 1, constant_values=False)
+                    # Vertical segments: boundary at h_edges[i] spanning s_edges[j..j+1]
+                    v_bound = padded[:-1, 1:-1] != padded[1:, 1:-1]
+                    vi, vj = np.where(v_bound)
+                    v_segs = [[(h_edges[i], s_edges[j]), (h_edges[i], s_edges[j + 1])]
+                               for i, j in zip(vi, vj)]
+                    # Horizontal segments: boundary at s_edges[j] spanning h_edges[i..i+1]
+                    h_bound = padded[1:-1, :-1] != padded[1:-1, 1:]
+                    hi, hj = np.where(h_bound)
+                    h_segs = [[(h_edges[i], s_edges[j]), (h_edges[i + 1], s_edges[j])]
+                               for i, j in zip(hi, hj)]
+                    contour_color = "white" if v_mid < 128 else "black"
+                    ax.add_collection(LineCollection(v_segs + h_segs,
+                                                     colors=contour_color, linewidths=0.8))
 
             ax.set_title(f"V bin {v_idx}  (V≈{v_mid:.0f})", fontsize=8)
             ax.set_xlabel("H", fontsize=7)
             ax.set_ylabel("S", fontsize=7)
             ax.tick_params(labelsize=6)
 
-        fig.suptitle("HSV Mask — cells with at least one ball pixel", fontsize=11)
+        fig.suptitle(title, fontsize=11)
         fig.tight_layout()
-        fig.savefig(str(ctx.paths.pass_raw_dir / "HSVmask.png"), dpi=120)
+        fig.savefig(str(ctx.paths.pass_raw_dir / filename), dpi=120)
+        plt.close(fig)
+
+    def _write_hsvprob_hist(self, ctx: PassContext, post_sig: np.ndarray) -> None:
+        """Histogram of P(sig|HSV) values for non-zero bins."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        vals = post_sig[post_sig > 0].ravel()
+        fig, ax = plt.subplots(figsize=(8, 4))
+        if vals.size:
+            ax.hist(vals, bins=50, histtype="step", color="steelblue")
+        ax.set_xlabel("P(sig|HSV)")
+        ax.set_ylabel("bin count")
+        ax.set_title("Distribution of Bayesian Posterior P(sig|HSV)  [non-zero bins only]")
+        fig.tight_layout()
+        fig.savefig(str(ctx.paths.pass_raw_dir / "HSVprob_hist.png"), dpi=120)
         plt.close(fig)
 
     def write_raw_outputs(self, ctx: PassContext, result: dict) -> list[dict]:
@@ -165,7 +291,8 @@ class Pass3:
         artifacts = []
         for name, typ in [
             ("ball_colors.csv", "csv"),
-            ("HSVmask.npz", "npz"), ("HSVmask.png", "png"),
+            ("HSVmask.npz", "npz"),
+            ("HSVsig.png", "png"), ("HSVbg.png", "png"), ("HSVprob.png", "png"), ("HSVprob_hist.png", "png"),
         ]:
             p = raw_dir / name
             if p.exists():
@@ -179,7 +306,8 @@ class Pass3:
         import shutil
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("ball_colors.csv", "HSVmask.npz", "HSVmask.png"):
+        for name in ("ball_colors.csv", "HSVmask.npz",
+                     "HSVsig.png", "HSVbg.png", "HSVprob.png", "HSVprob_hist.png"):
             src = ctx.paths.pass_raw_dir / name
             if src.exists():
                 shutil.copy2(src, accepted_dir / name)
