@@ -42,9 +42,9 @@ class Pass4:
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
         if not rally_path.exists():
             raise FileNotFoundError("Pass 2 accepted rally.json not found — record rallies in Pass 2 first")
-        mask_path = ctx.paths.project_root / "passes" / "pass3" / "raw" / "Pratio_mask.npz"
+        mask_path = ctx.paths.project_root / "passes" / "pass3" / "raw" / "HSVmask.npz"
         if not mask_path.exists():
-            raise FileNotFoundError("Pass 3 Pratio_mask.npz not found — run Pass 3 first")
+            raise FileNotFoundError("Pass 3 HSVmask.npz not found — run Pass 3 first")
 
     def run(self, ctx: PassContext, progress=None):
         if progress is None:
@@ -82,9 +82,9 @@ class Pass4:
             raw_ann = json.loads(ann_path.read_text()).get("annotations", {})
             ann_by_frame = {int(k): v for k, v in raw_ann.items()}
 
-        progress.update(0.06, "setup", "Loading LR mask from pass 3…")
-        mask_path = ctx.paths.project_root / "passes" / "pass3" / "raw" / "Pratio_mask.npz"
-        lr_blurred: np.ndarray = np.load(str(mask_path))["mask"]  # (H_BINS, S_BINS, V_BINS), bool
+        progress.update(0.06, "setup", "Loading HSV mask from pass 3…")
+        mask_path = ctx.paths.project_root / "passes" / "pass3" / "raw" / "HSVmask.npz"
+        hsv_mask: np.ndarray = np.load(str(mask_path))["mask"]  # (H_BINS, S_BINS, V_BINS), bool
 
         progress.update(0.08, "setup", "Opening video…")
         cap = cv2.VideoCapture(str(ctx.video_path))
@@ -192,7 +192,7 @@ class Pass4:
                     h_bin = np.minimum((hsv[:, :, 0] * h_scale).astype(np.int32), _H_BINS - 1)
                     s_bin = np.minimum((hsv[:, :, 1] * s_scale).astype(np.int32), _S_BINS - 1)
                     v_bin = np.minimum((hsv[:, :, 2] * v_scale).astype(np.int32), _V_BINS - 1)
-                    color_mask = lr_blurred[h_bin, s_bin, v_bin].astype(np.uint8) * 255
+                    color_mask = hsv_mask[h_bin, s_bin, v_bin].astype(np.uint8) * 255
                     color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
 
                     # --- Combined mask: motion AND color AND tent silhouette ---

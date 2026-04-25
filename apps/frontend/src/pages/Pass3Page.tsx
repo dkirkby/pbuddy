@@ -7,7 +7,7 @@ export default function Pass3Page() {
   const navigate = useNavigate()
   const qc = useQueryClient()
 
-  const pratioUrl = `/api/projects/${projectId}/passes/pass3/raw/Pratio.png`
+  const hsvMaskUrl = `/api/projects/${projectId}/passes/pass3/raw/HSVmask.png`
 
   const accept = useMutation({
     mutationFn: () => api.acceptPass3(projectId!),
@@ -24,7 +24,7 @@ export default function Pass3Page() {
       </button>
       <h1 style={{ marginTop: 0 }}>Pass 3 — Ball Color Tagging</h1>
 
-      <img src={pratioUrl} style={{ display: 'block', maxWidth: '100%', marginBottom: 24 }} />
+      <img src={hsvMaskUrl} style={{ display: 'block', maxWidth: '100%', marginBottom: 24 }} />
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
         <button
