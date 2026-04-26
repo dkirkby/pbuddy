@@ -123,6 +123,9 @@ export const api = {
       `/api/projects/${projectId}/passes/pass4/raw/detections.json`
     ),
 
+  submitPass3Corrections: (projectId: string, sourceProjectId: string) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass3/corrections`, { source_project_id: sourceProjectId }),
+
   acceptPass3: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass3/accept`),
 

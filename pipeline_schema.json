@@ -125,6 +125,12 @@
     "pass3": {
       "name": "Ball Color Tagging",
       "raw_artifacts": {
+        "result.json": {
+          "description": "annotation_count, ball_pixel_count, min_ball_radius, max_ball_radius; annotation_count=0 signals that no annotations were found and the mask must be borrowed from another project",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass2", "file": "annotations.json" }
+          ]
+        },
         "ball_colors.csv": {
           "description": "R, G, B, H, S, V channel values sampled from pixels within the annotated ball patches; one row per sampled pixel across all annotated frames",
           "depends_on": [
@@ -158,7 +164,8 @@
             { "type": "setting", "pass": "pass1", "name": "court_corners" },
             { "type": "setting", "pass": "pass2", "name": "rally_records" },
             { "type": "setting", "pass": "pass2", "name": "ball_annotations" },
-            { "type": "artifact", "pass": "pass3", "file": "HSVmask.npz" }
+            { "type": "artifact", "pass": "pass3", "file": "HSVmask.npz" },
+            { "type": "artifact", "pass": "pass3", "file": "result.json" }
           ]
         },
         "detections_map.png": {

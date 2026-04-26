@@ -42,9 +42,9 @@ class Pass4:
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
         if not rally_path.exists():
             raise FileNotFoundError("Pass 2 accepted rally.json not found — record rallies in Pass 2 first")
-        mask_path = ctx.paths.project_root / "passes" / "pass3" / "raw" / "HSVmask.npz"
+        mask_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "HSVmask.npz"
         if not mask_path.exists():
-            raise FileNotFoundError("Pass 3 HSVmask.npz not found — run Pass 3 first")
+            raise FileNotFoundError("Pass 3 HSVmask.npz not found — accept Pass 3 first")
 
     def run(self, ctx: PassContext, progress=None):
         if progress is None:
@@ -63,12 +63,18 @@ class Pass4:
         tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
         bg_h, bg_w = tent_mask.shape[:2]
 
-        progress.update(0.05, "setup", "Loading ball radius, annotations, and rally bounds from pass 2…")
-        ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
-        _ann_data = json.loads(ann_path.read_text()).get("annotations", {}) if ann_path.exists() else {}
-        _radii = [v.get("radius", 0) for v in _ann_data.values() if v.get("radius", 0) > 0]
-        max_ball_radius = round(max(_radii)) if _radii else 16
-        min_blob_radius = (round(min(_radii)) if _radii else 4) / 4
+        progress.update(0.05, "setup", "Loading ball radius from pass 3, rally bounds from pass 2…")
+        pass3_result_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "result.json"
+        if pass3_result_path.exists():
+            pass3_result = json.loads(pass3_result_path.read_text())
+            max_ball_radius = pass3_result.get("max_ball_radius") or 16
+            min_blob_radius = (pass3_result.get("min_ball_radius") or 4) / 4
+        else:
+            ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
+            _ann_data = json.loads(ann_path.read_text()).get("annotations", {}) if ann_path.exists() else {}
+            _radii = [v.get("radius", 0) for v in _ann_data.values() if v.get("radius", 0) > 0]
+            max_ball_radius = round(max(_radii)) if _radii else 16
+            min_blob_radius = (round(min(_radii)) if _radii else 4) / 4
 
         # Rally frame numbers are browser-side (OpenCV frame_idx + 1); convert to OpenCV indices.
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
@@ -83,7 +89,7 @@ class Pass4:
             ann_by_frame = {int(k): v for k, v in raw_ann.items()}
 
         progress.update(0.06, "setup", "Loading HSV mask from pass 3…")
-        mask_path = ctx.paths.project_root / "passes" / "pass3" / "raw" / "HSVmask.npz"
+        mask_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "HSVmask.npz"
         hsv_mask: np.ndarray = np.load(str(mask_path))["mask"]  # (H_BINS, S_BINS, V_BINS), bool
 
         progress.update(0.08, "setup", "Opening video…")

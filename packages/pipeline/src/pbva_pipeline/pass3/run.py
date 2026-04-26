@@ -43,11 +43,19 @@ class Pass3:
         ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
         annotations = json.loads(ann_path.read_text()).get("annotations", {})
 
+        raw_dir = ctx.paths.pass_raw_dir
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        if not annotations:
+            result = {"annotation_count": 0, "ball_pixel_count": 0,
+                      "min_ball_radius": p2.min_ball_radius, "max_ball_radius": p2.max_ball_radius}
+            (raw_dir / "result.json").write_text(json.dumps(result, indent=2))
+            progress.update(1.0, "done", "No ball annotations — mask will be borrowed from another project")
+            return result
+
         patches_dir = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "patches" / "raw"
         patch_files = {str(int(p.stem)): p for p in patches_dir.glob("*.png")}
 
-        raw_dir = ctx.paths.pass_raw_dir
-        raw_dir.mkdir(parents=True, exist_ok=True)
         csv_path = raw_dir / "ball_colors.csv"
 
         total = len(annotations)
@@ -126,8 +134,11 @@ class Pass3:
                                 title="P(sig|HSV) — Bayesian posterior probability")
         self._write_hsvprob_hist(ctx, post_sig)
 
+        result = {"ball_pixel_count": len(rows), "annotation_count": total,
+                  "min_ball_radius": p2.min_ball_radius, "max_ball_radius": p2.max_ball_radius}
+        (raw_dir / "result.json").write_text(json.dumps(result, indent=2))
         progress.update(1.0, "done", f"Sampled {len(rows)} ball pixels across {total} annotations")
-        return {"ball_pixel_count": len(rows), "annotation_count": total}
+        return result
 
     def _sample_bg_colors(self, ctx: PassContext, annotations: dict,
                           n_sig_per_frame: dict[str, int], rmin: float,
@@ -290,7 +301,7 @@ class Pass3:
         raw_dir = ctx.paths.pass_raw_dir
         artifacts = []
         for name, typ in [
-            ("ball_colors.csv", "csv"),
+            ("result.json", "json"), ("ball_colors.csv", "csv"),
             ("HSVmask.npz", "npz"),
             ("HSVsig.png", "png"), ("HSVbg.png", "png"), ("HSVprob.png", "png"), ("HSVprob_hist.png", "png"),
         ]:
@@ -300,13 +311,26 @@ class Pass3:
         return artifacts
 
     def validate_corrections(self, payload: dict) -> dict:
+        if "source_project_id" in payload:
+            return {"source_project_id": str(payload["source_project_id"])}
         return {}
 
     def build_accepted_output(self, ctx: PassContext, raw_result: dict, corrections: dict | None) -> dict:
         import shutil
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("ball_colors.csv", "HSVmask.npz",
+
+        if corrections and "source_project_id" in corrections:
+            source_accepted = (ctx.paths.project_root.parent
+                               / corrections["source_project_id"]
+                               / "passes" / "pass3" / "accepted")
+            for name in ("HSVmask.npz", "result.json"):
+                src = source_accepted / name
+                if src.exists():
+                    shutil.copy2(src, accepted_dir / name)
+            return raw_result
+
+        for name in ("result.json", "ball_colors.csv", "HSVmask.npz",
                      "HSVsig.png", "HSVbg.png", "HSVprob.png", "HSVprob_hist.png"):
             src = ctx.paths.pass_raw_dir / name
             if src.exists():
