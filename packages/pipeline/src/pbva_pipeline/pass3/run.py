@@ -24,12 +24,14 @@ class Pass3:
     def validate_inputs(self, ctx: PassContext) -> None:
         if not ctx.prior_accepted:
             raise ValueError("Pass 2 accepted output is required for Pass 3")
-        patches_dir = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "patches" / "raw"
-        if not patches_dir.exists():
-            raise FileNotFoundError(f"Pass 2 accepted patches not found: {patches_dir}")
         ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
         if not ann_path.exists():
             raise FileNotFoundError(f"Pass 2 annotations not found: {ann_path}")
+        annotations = json.loads(ann_path.read_text()).get("annotations", {})
+        if annotations:
+            patches_dir = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "patches" / "raw"
+            if not patches_dir.exists():
+                raise FileNotFoundError(f"Pass 2 accepted patches not found: {patches_dir}")
 
     def run(self, ctx: PassContext, progress=None, nbg_nsig_ratio: int = 100):
         if progress is None:
