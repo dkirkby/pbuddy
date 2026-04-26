@@ -55,6 +55,11 @@ export default function ProjectHome() {
     }
   })
 
+  const runPass0 = useMutation({
+    mutationFn: () => api.runPass0(projectId!),
+    onSuccess: () => { setProgress(null); qc.invalidateQueries({ queryKey: ['project', projectId] }) },
+  })
+
   const runPass1 = useMutation({
     mutationFn: () => api.runPass1(projectId!),
     onSuccess: () => { setProgress(null); qc.invalidateQueries({ queryKey: ['project', projectId] }) },
@@ -116,6 +121,7 @@ export default function ProjectHome() {
 
   if (isLoading || !project) return <div style={{ padding: 24 }}>Loading…</div>
 
+  const pass0 = project.passes.find((p) => p.pass_name === 'pass0')
   const pass1 = project.passes.find((p) => p.pass_name === 'pass1')
   const pass2 = project.passes.find((p) => p.pass_name === 'pass2')
   const pass3 = project.passes.find((p) => p.pass_name === 'pass3')
@@ -170,6 +176,20 @@ export default function ProjectHome() {
             waiting_for_user  → Review → + Re-run
             accepted          → ✓ Accepted + Re-run
       */}
+
+      {/* Pass 0 card */}
+      <PassCard
+        title="Pass 0 — Identify Court and Specify Camera Model"
+        description="Computes a median background from frames near the video midpoint; user aligns court corners and sets the radial distortion parameter."
+        pass={pass0}
+        prereqMet={true}
+        prereqLabel=""
+        progress={progress?.passName === 'pass0' ? progress : null}
+        onRun={() => runPass0.mutate()}
+        isPending={runPass0.isPending}
+        reviewPath={`/projects/${projectId}/pass0`}
+        reviewLabel="Review →"
+      />
 
       {/* Pass 1 card */}
       <PassCard

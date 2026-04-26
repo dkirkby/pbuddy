@@ -32,7 +32,10 @@ _AUTO_ACCEPT_PASSES = {"pass4", "pass6"}
 
 def _get_pass(pass_name: str):
     if pass_name not in _PASS_REGISTRY:
-        if pass_name == "pass1":
+        if pass_name == "pass0":
+            from pbva_pipeline.pass0.run import Pass0
+            _PASS_REGISTRY["pass0"] = Pass0()
+        elif pass_name == "pass1":
             from pbva_pipeline.pass1.run import Pass1
             _PASS_REGISTRY["pass1"] = Pass1()
         elif pass_name == "pass2":

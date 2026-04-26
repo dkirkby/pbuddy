@@ -10,6 +10,39 @@
     }
   },
   "passes": {
+    "pass0": {
+      "name": "Court and Camera Model",
+      "raw_artifacts": {
+        "median.png": {
+          "description": "Pixel-wise median of 30 frames centered on the video midpoint (stride 15); used as background plate for court corner alignment",
+          "depends_on": [
+            { "type": "source_video" }
+          ]
+        },
+        "result.json": {
+          "description": "Background image dimensions (bg_width, bg_height)",
+          "depends_on": [
+            { "type": "source_video" }
+          ]
+        }
+      },
+      "settings": {
+        "court_corners": {
+          "description": "Pixel coordinates of the four court corners in the distorted background image; user drags handles in the SVG overlay editor",
+          "type": "object",
+          "schema": {
+            "top_left":     { "x": "number", "y": "number" },
+            "top_right":    { "x": "number", "y": "number" },
+            "bottom_left":  { "x": "number", "y": "number" },
+            "bottom_right": { "x": "number", "y": "number" }
+          }
+        },
+        "k1": {
+          "description": "Radial distortion coefficient for single-term division model: r_u = r_d / (1 + K1 * r_d²); negative for barrel, positive for pincushion",
+          "type": "number"
+        }
+      }
+    },
     "pass1": {
       "name": "Scene Calibration",
       "raw_artifacts": {

@@ -17,7 +17,7 @@ from pbva_core.enums import ArtifactRole, JobStatus, PassState, ProjectStatus
 from pbva_core.types import (
     ArtifactRef,
     JobSummary,
-    Pass1CorrectionPayload,
+    Pass0CorrectionPayload,
     PassStatusSummary,
 )
 
@@ -33,6 +33,58 @@ _IN_FLIGHT = {PassState.queued.value, PassState.running.value}
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _rebuild_pass0_accepted(db: Session, project_id: str, settings) -> None:
+    """Regenerate pass0 accepted result.json from raw output + latest corrections."""
+    from pbva_core import paths as p
+    from pbva_core.types import Pass0RawResult, Pass0CorrectionPayload
+    from pbva_pipeline.base import NullProgress, PassPaths, PassContext
+    from pbva_pipeline.pass0.run import Pass0
+
+    pass_row = db.execute(
+        select(Pass)
+        .where(Pass.project_id == project_id)
+        .where(Pass.pass_name == "pass0")
+    ).scalar_one_or_none()
+    if pass_row is None:
+        return
+
+    raw_path = p.pass_raw_dir(settings.data_root, project_id, "pass0") / "result.json"
+    if not raw_path.exists():
+        return
+
+    raw_result = Pass0RawResult.model_validate_json(raw_path.read_text())
+
+    corrections = None
+    if pass_row.latest_correction_id:
+        corr_art = db.get(Artifact, pass_row.latest_correction_id)
+        if corr_art and Path(corr_art.path).exists():
+            corrections = Pass0CorrectionPayload.model_validate_json(Path(corr_art.path).read_text())
+
+    project = db.get(Project, project_id)
+    pass_paths = PassPaths(
+        project_root=p.project_root(settings.data_root, project_id),
+        uploads_dir=p.uploads_dir(settings.data_root, project_id),
+        derived_dir=p.derived_dir(settings.data_root, project_id),
+        pass_raw_dir=p.pass_raw_dir(settings.data_root, project_id, "pass0"),
+        pass_corrections_dir=p.pass_corrections_dir(settings.data_root, project_id, "pass0"),
+        pass_accepted_dir=p.pass_accepted_dir(settings.data_root, project_id, "pass0"),
+    )
+    ctx = PassContext(
+        project_id=project_id,
+        project_name=project.name,
+        video_path=Path(project.video_path) if project.video_path else pass_paths.original_video,
+        video_duration_s=project.video_duration_s or 0.0,
+        video_fps=project.video_fps or 30.0,
+        video_width=project.video_width or 1920,
+        video_height=project.video_height or 1080,
+        paths=pass_paths,
+        settings=settings,
+        job_id=pass_row.current_job_id or "",
+        progress=NullProgress(),
+    )
+    Pass0().build_accepted_output(ctx, raw_result, corrections)
 
 
 def _rebuild_pass1_accepted(db: Session, project_id: str, settings) -> None:
@@ -264,6 +316,114 @@ def list_pass_artifacts(project_id: str, pass_name: str, db: Session = Depends(g
             for a in artifacts
         ],
     }
+
+
+@router.get("/{project_id}/passes/pass0/corrections")
+def get_pass0_corrections(
+    project_id: str,
+    db: Session = Depends(get_db),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass0")
+    if not pass_row.latest_correction_id:
+        return {"ok": True, "data": None}
+    corr_art = db.get(Artifact, pass_row.latest_correction_id)
+    if not corr_art or not Path(corr_art.path).exists():
+        return {"ok": True, "data": None}
+    return {"ok": True, "data": json.loads(Path(corr_art.path).read_text())}
+
+
+@router.put("/{project_id}/passes/pass0/corrections")
+def submit_pass0_corrections(
+    project_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass0")
+    if pass_row.state in _IN_FLIGHT:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass 0 is currently {pass_row.state}; wait for it to finish before saving corrections",
+        )
+
+    corrections = Pass0CorrectionPayload.model_validate(body)
+
+    from pbva_core import paths as p
+    corrections_dir = p.pass_corrections_dir(settings.data_root, project_id, "pass0")
+    corrections_dir.mkdir(parents=True, exist_ok=True)
+    (corrections_dir / "latest.json").write_text(corrections.model_dump_json(indent=2))
+
+    art_id = str(uuid.uuid4())
+    art = Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass0",
+        artifact_role=ArtifactRole.correction.value,
+        artifact_type="json",
+        path=str(corrections_dir / "latest.json"),
+    )
+    db.add(art)
+    pass_row.latest_correction_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    if pass_row.state == PassState.accepted.value:
+        _rebuild_pass0_accepted(db, project_id, settings)
+
+    _mark_settings_dirty(db, project_id, "pass0")
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/{project_id}/passes/pass0/accept")
+def accept_pass0(
+    project_id: str,
+    db: Session = Depends(get_db),
+    settings=Depends(get_settings),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass0")
+    if pass_row.state not in (PassState.waiting_for_user.value, PassState.accepted.value):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass 0 is in state '{pass_row.state}', cannot accept",
+        )
+
+    from pbva_core import paths as p
+    raw_path = p.pass_raw_dir(settings.data_root, project_id, "pass0") / "result.json"
+    if not raw_path.exists():
+        raise HTTPException(status_code=500, detail="Raw result.json not found")
+
+    _rebuild_pass0_accepted(db, project_id, settings)
+
+    accepted_path = p.pass_accepted_dir(settings.data_root, project_id, "pass0") / "result.json"
+    art_id = str(uuid.uuid4())
+    art = Artifact(
+        id=art_id,
+        project_id=project_id,
+        pass_name="pass0",
+        artifact_role=ArtifactRole.accepted.value,
+        artifact_type="json",
+        path=str(accepted_path),
+    )
+    db.add(art)
+
+    pass_row.state = PassState.accepted.value
+    pass_row.is_dirty = False
+    pass_row.latest_accepted_artifact_id = art_id
+    pass_row.updated_at = _utcnow()
+
+    project = db.get(Project, project_id)
+    project.status = ProjectStatus.in_progress.value
+    project.updated_at = _utcnow()
+
+    from pbva_db.models import Event
+    ev = Event(
+        project_id=project_id,
+        event_type="pass_accepted",
+        payload_json=json.dumps({"pass_name": "pass0"}),
+    )
+    db.add(ev)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/{project_id}/passes/pass1/corrections")

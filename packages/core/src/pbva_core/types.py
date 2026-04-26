@@ -83,6 +83,28 @@ class ArtifactRef(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pass 0 domain types
+# ---------------------------------------------------------------------------
+
+
+class Pass0RawResult(BaseModel):
+    bg_width: int
+    bg_height: int
+
+
+class Pass0CorrectionPayload(BaseModel):
+    court_geometry: CourtGeometry | None = None
+    k1: float | None = None
+
+
+class Pass0AcceptedOutput(BaseModel):
+    court_geometry: CourtGeometry
+    k1: float = 0.0
+    bg_width: int
+    bg_height: int
+
+
+# ---------------------------------------------------------------------------
 # Pass 1 domain types
 # ---------------------------------------------------------------------------
 

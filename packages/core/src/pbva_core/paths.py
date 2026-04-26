@@ -35,7 +35,7 @@ def pass_accepted_dir(data_root: Path, project_id: str, pass_name: str) -> Path:
 
 def ensure_project_dirs(data_root: Path, project_id: str) -> None:
     """Create the full directory tree for a new project."""
-    for pass_name in ("pass1", "pass2", "pass3", "pass4"):
+    for pass_name in ("pass0", "pass1", "pass2", "pass3", "pass4"):
         pass_raw_dir(data_root, project_id, pass_name).mkdir(parents=True, exist_ok=True)
         pass_corrections_dir(data_root, project_id, pass_name).mkdir(parents=True, exist_ok=True)
         pass_accepted_dir(data_root, project_id, pass_name).mkdir(parents=True, exist_ok=True)

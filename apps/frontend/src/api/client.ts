@@ -2,6 +2,7 @@ import type {
   ArtifactRef,
   BallAnnotation,
   JobSummary,
+  Pass0CorrectionPayload,
   Pass1CorrectionPayload,
   Pass2Corrections,
   Pass5Segments,
@@ -50,6 +51,23 @@ export const api = {
     }
     return res.json()
   },
+
+  runPass0: (projectId: string) =>
+    post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass0/run`),
+
+  getPass0Artifacts: (projectId: string) =>
+    get<{ ok: boolean; data: ArtifactRef[] }>(`/api/projects/${projectId}/passes/pass0/artifacts`),
+
+  getPass0Corrections: (projectId: string) =>
+    get<{ ok: boolean; data: Pass0CorrectionPayload | null }>(
+      `/api/projects/${projectId}/passes/pass0/corrections`
+    ),
+
+  submitPass0Corrections: (projectId: string, corrections: Pass0CorrectionPayload) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass0/corrections`, corrections),
+
+  acceptPass0: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass0/accept`),
 
   runPass1: (projectId: string) =>
     post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass1/run`),

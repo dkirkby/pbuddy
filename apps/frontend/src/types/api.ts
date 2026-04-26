@@ -60,6 +60,16 @@ export interface StableBounds {
   out_time_s: number
 }
 
+export interface Pass0RawResult {
+  bg_width: number
+  bg_height: number
+}
+
+export interface Pass0CorrectionPayload {
+  court_geometry?: CourtGeometry | null
+  k1?: number | null
+}
+
 export interface Pass1RawResult {
   stable_bounds: StableBounds
   median_background_paths: string[]

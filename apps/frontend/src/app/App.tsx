@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import ProjectListPage from '../pages/ProjectListPage'
 import ProjectHome from '../pages/ProjectHome'
+import Pass0Page from '../pages/Pass0Page'
 import Pass1Page from '../pages/Pass1Page'
 import Pass2Page from '../pages/Pass2Page'
 import Pass3Page from '../pages/Pass3Page'
@@ -20,6 +21,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<ProjectListPage />} />
           <Route path="/projects/:projectId" element={<ProjectHome />} />
+          <Route path="/projects/:projectId/pass0" element={<Pass0Page />} />
           <Route path="/projects/:projectId/pass1" element={<Pass1Page />} />
           <Route path="/projects/:projectId/pass2" element={<Pass2Page />} />
           <Route path="/projects/:projectId/pass3" element={<Pass3Page />} />
