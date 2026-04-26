@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Passes 1–6 are implemented end-to-end (run → review → accept). Key reference documents:
+Pass 0 and Passes 2–6 are implemented end-to-end (run → review → accept). Pass 1 is implemented but will be reworked to consume Pass 0's accepted output (court corners + K1) rather than recomputing its own court geometry. Key reference documents:
 
 - `VISION.md` — requirements and accuracy targets
 - `PIPELINE.md` — the processing pipeline with user correction workflows
@@ -65,7 +65,7 @@ uv run mypy packages/ apps/
 
 ## Architecture Overview
 
-PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 6-pass sequential pipeline:
+PBuddy is a **local web application** (no cloud dependency) for analyzing pickleball match videos via a 7-pass sequential pipeline:
 
 ```
 Browser (React UI)
@@ -74,9 +74,9 @@ FastAPI Backend  ←→  SQLite (metadata)
   ↕
 Worker Process  ←→  Filesystem (artifacts)
   ↕
-Pass 1 → Pass 2 → Pass 3 → Pass 4 → Pass 5
-              ↘                          ↘
-               ╰──────────────────────→ Pass 6
+Pass 0 → Pass 1 → Pass 2 → Pass 3 → Pass 4 → Pass 5
+                       ↘                          ↘
+                        ╰──────────────────────→ Pass 6
 ```
 
 Each pass follows the **accepted-state pattern**:
@@ -85,11 +85,12 @@ Each pass follows the **accepted-state pattern**:
 3. User accepts; system merges raw + corrections into **accepted** artifacts
 4. Next pass depends **only** on accepted artifacts — never on raw outputs
 
-### The 6 Passes
+### The 7 Passes
 
 | Pass | Goal | Key outputs |
 |------|------|-------------|
-| 1 | Identify Background and Court Outline | Median background plate(s), court geometry, stable time bounds |
+| 0 | Identify Court and Specify Camera Model | Median background (30 frames at midpoint, stride 15), 4 court corner positions (¼-pixel precision), radial distortion K1 (single-term division model: r_u = r_d / (1 + K1·r_d²)) |
+| 1 | Identify Background and Court Outline | Median background plate(s), court geometry, stable time bounds *(will be reworked to consume Pass 0 output)* |
 | 2 | Rally and Ball Annotation | Per-frame ball position + radius annotations, patch images |
 | 3 | Ball color tagging | RGB+HSV pixel samples, hue-saturation & value-saturation scatter plots |
 | 4 | Ball detection | Per-frame motion+color+silhouette candidate detections across stable range |
@@ -98,6 +99,8 @@ Each pass follows the **accepted-state pattern**:
 
 Pass 6 requires `pass2/accepted/rally.json` and optionally reads `pass5/accepted/segments.json` for the ball-trail overlay (trail is silently skipped if absent). Re-running Pass 1 or Pass 2 cascades to invalidate Pass 6.
 
+Pass 0 accepted output (`pass0/accepted/result.json`) stores `court_geometry` (4 corner pixel coords at ¼-pixel resolution), `k1` (distortion coefficient), `bg_width`, and `bg_height`. Pass 0 currently has no downstream dependents in `pipeline_schema.json`; that wiring will be added when Pass 1 is reworked.
+
 ### Project Artifact Layout
 
 ```
@@ -105,7 +108,7 @@ data/projects/<project_id>/
 ├── uploads/original.mp4
 ├── derived/            # normalized video, thumbnails, audio
 └── passes/
-    └── pass{1-6}/
+    └── pass{0-6}/
         ├── raw/        # system output
         ├── corrections/ # user-submitted corrections
         └── accepted/   # merged, used by downstream passes
@@ -141,7 +144,8 @@ POST   /api/projects/{id}/passes/{pass}/accept
 
 - `ProjectListPage` — list/create projects
 - `ProjectHome` — project detail, pass state controls, workflow entry point
-- `Pass1Page` — court geometry editor (SVG overlay on background plate)
+- `Pass0Page` — court corner alignment and camera model: median image with red SVG court overlay (curves with K1 distortion), K1 slider (−0.5 to +0.5), 2×2 grid of 4× zoom boxes (one per corner) for ¼-pixel precision dragging via `movementX/Y` document-level listeners
+- `Pass1Page` — court geometry editor (SVG overlay on background plate) *(will be reworked)*
 - `Pass2Page` — ball annotation tool (frame scrubbing + point placement)
 - `Pass3Page` — ball color polygon editor (SVG overlays on hue-saturation and value-saturation scatter plots)
 - `Pass4Page` — detection reviewer (video player with per-frame ball detection overlay)
@@ -152,7 +156,7 @@ POST   /api/projects/{id}/passes/{pass}/accept
 
 - **`pbva-core`** (`packages/core`) — shared primitives: `Settings` (config), `PassPaths` (artifact path builder), `enums` (pass states, job states), `types`, `errors` (`WorkerCancelled`), `dimensions` (loads `dimensions.json`)
 - **`pbva-db`** (`packages/db`) — SQLAlchemy models and DB engine; single source of truth for the schema
-- **`pbva-pipeline`** (`packages/pipeline`) — one subpackage per pass (`pass1/`…`pass6/`), each with `run.py`; `base.py` defines `PassPaths`, `ProgressReporter` protocol, and `NullProgress`
+- **`pbva-pipeline`** (`packages/pipeline`) — one subpackage per pass (`pass0/`…`pass6/`), each with `run.py`; `base.py` defines `PassPaths`, `ProgressReporter` protocol, and `NullProgress`
 - **`pbva-api`** (`apps/api`) — FastAPI routes (`routes/projects.py`, `passes.py`, `artifacts.py`, `jobs.py`) + `websocket_manager.py` for broadcasting events
 - **`pbva-worker`** (`apps/worker`) — `worker_loop.py` polls the job queue; `job_claiming.py` atomically claims a job; `execution_context.py` wraps pass execution with progress reporting and cancellation; `progress.py` writes events to the DB for WebSocket streaming
 
