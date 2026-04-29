@@ -88,14 +88,9 @@ def _rebuild_pass0_accepted(db: Session, project_id: str, settings) -> None:
 
 
 def _rebuild_pass1_accepted(db: Session, project_id: str, settings) -> None:
-    """Regenerate pass1 accepted artifacts (tent_mask.png + result.json) in-place.
-
-    Called both from accept_pass1 and from submit_pass1_corrections when pass1 is
-    already accepted, so that court-corner changes take effect immediately without
-    requiring an explicit re-accept.
-    """
+    """Regenerate pass1 accepted artifacts (tent_mask.png + result.json) in-place."""
     from pbva_core import paths as p
-    from pbva_core.types import Pass1RawResult, Pass1CorrectionPayload
+    from pbva_core.types import Pass1RawResult
     from pbva_pipeline.base import NullProgress, PassPaths, PassContext
     from pbva_pipeline.pass1.run import Pass1
 
@@ -112,14 +107,6 @@ def _rebuild_pass1_accepted(db: Session, project_id: str, settings) -> None:
         return  # raw output not yet produced; nothing to regenerate
 
     raw_result = Pass1RawResult.model_validate_json(raw_path.read_text())
-
-    corrections = None
-    if pass_row.latest_correction_id:
-        corr_art = db.get(Artifact, pass_row.latest_correction_id)
-        if corr_art and Path(corr_art.path).exists():
-            corrections = Pass1CorrectionPayload.model_validate_json(Path(corr_art.path).read_text())
-
-    median_bg_artifact_id = pass_row.latest_raw_artifact_id or ""
 
     project = db.get(Project, project_id)
     pass_paths = PassPaths(
@@ -143,7 +130,7 @@ def _rebuild_pass1_accepted(db: Session, project_id: str, settings) -> None:
         job_id=pass_row.current_job_id or "",
         progress=NullProgress(),
     )
-    Pass1().build_accepted_output(ctx, raw_result, corrections, median_bg_artifact_id)
+    Pass1().build_accepted_output(ctx, raw_result)
 
 
 def _mark_settings_dirty(db: Session, project_id: str, pass_name: str) -> None:

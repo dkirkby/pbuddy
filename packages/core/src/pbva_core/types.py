@@ -90,6 +90,9 @@ class ArtifactRef(BaseModel):
 class Pass0RawResult(BaseModel):
     bg_width: int
     bg_height: int
+    median_count: int = 0
+    midpoint_chunk: int = 0
+    video_fps: float = 30.0
 
 
 class Pass0CorrectionPayload(BaseModel):
@@ -130,22 +133,43 @@ class CourtGeometry(BaseModel):
     net_right: CourtCorner | None = None
 
 
+class Pass1Sample(BaseModel):
+    s: float    # position along segment, -1 (px2 end) to +1 (px1 end)
+    x: float    # distorted image x
+    y: float    # distorted image y
+    val: float  # V - S/2 value at this point (bilinear interpolated)
+
+
+class Pass1SamplePoint(BaseModel):
+    sx: float   # distorted image coords of baseline interior point
+    sy: float
+    px1: float  # distorted image coords of +perp_seg_length_px displacement
+    py1: float
+    px2: float  # distorted image coords of -perp_seg_length_px displacement
+    py2: float
+    samples: list[Pass1Sample] = []
+
+
+class Pass1CourtLine(BaseModel):
+    name: str   # "near_baseline", "left_sideline", "right_sideline"
+    color: str  # hex color for display, e.g. "#0ff"
+    points: list[Pass1SamplePoint]
+
+
 class Pass1RawResult(BaseModel):
-    stable_bounds: StableBounds
-    median_background_paths: list[str]               # relative to project root, one per window
-    median_window_times: list[tuple[float, float]]   # (start_s, end_s) per window
-    bg_width: int                                    # pixel width of background images
-    bg_height: int                                   # pixel height of background images
+    bg_width: int
+    bg_height: int
+    median_chunk_index: int
+    perp_seg_length_px: float
+    perp_seg_points: int
+    court_lines: list[Pass1CourtLine]
 
 
 class Pass1CorrectionPayload(BaseModel):
-    court_geometry: CourtGeometry | None = None
+    pass
 
 
 class Pass1AcceptedOutput(BaseModel):
-    stable_bounds: StableBounds
-    court_geometry: CourtGeometry
-    median_background_artifact_id: str
     bg_width: int
     bg_height: int
 

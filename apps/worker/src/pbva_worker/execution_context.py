@@ -13,6 +13,7 @@ from pbva_pipeline.base import PassContext, PassPaths
 # For each pass, the name of the immediately prior pass whose accepted result.json
 # should be loaded into ctx.prior_accepted.
 _PRIOR_PASS: dict[str, str] = {
+    "pass1": "pass0",
     "pass2": "pass1",
     "pass3": "pass2",
     "pass4": "pass3",

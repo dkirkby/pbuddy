@@ -63,6 +63,9 @@ export interface StableBounds {
 export interface Pass0RawResult {
   bg_width: number
   bg_height: number
+  median_count: number
+  midpoint_chunk: number
+  video_fps: number
 }
 
 export interface Pass0CorrectionPayload {
@@ -70,16 +73,37 @@ export interface Pass0CorrectionPayload {
   k1?: number | null
 }
 
+export interface Pass1Sample {
+  s: number    // -1 to +1 along segment
+  x: number
+  y: number
+  val: number  // V - S/2 value
+}
+
+export interface Pass1SamplePoint {
+  sx: number; sy: number
+  px1: number; py1: number
+  px2: number; py2: number
+  samples: Pass1Sample[]
+}
+
+export interface Pass1CourtLine {
+  name: string
+  color: string
+  points: Pass1SamplePoint[]
+}
+
 export interface Pass1RawResult {
-  stable_bounds: StableBounds
-  median_background_paths: string[]
-  median_window_times: [number, number][]
   bg_width: number
   bg_height: number
+  median_chunk_index: number
+  perp_seg_length_px: number
+  perp_seg_points: number
+  court_lines: Pass1CourtLine[]
 }
 
 export interface Pass1CorrectionPayload {
-  court_geometry?: CourtGeometry | null
+  [key: string]: never
 }
 
 export interface WsEvent {

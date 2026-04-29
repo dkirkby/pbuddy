@@ -13,14 +13,14 @@
     "pass0": {
       "name": "Court and Camera Model",
       "raw_artifacts": {
-        "median.png": {
-          "description": "Pixel-wise median of 30 frames centered on the video midpoint (stride 15); used as background plate for court corner alignment",
+        "medians/median_NNN.png": {
+          "description": "Pixel-wise median of every 10th frame in each consecutive 5-second chunk; NNN is the zero-padded chunk index. The midpoint_chunk index (from result.json) identifies the chunk used for court corner alignment.",
           "depends_on": [
             { "type": "source_video" }
           ]
         },
         "result.json": {
-          "description": "Background image dimensions (bg_width, bg_height)",
+          "description": "Background image dimensions (bg_width, bg_height), median_count, midpoint_chunk index, and video_fps",
           "depends_on": [
             { "type": "source_video" }
           ]
@@ -44,43 +44,34 @@
       }
     },
     "pass1": {
-      "name": "Scene Calibration",
+      "name": "Near-Baseline Court Outline",
       "raw_artifacts": {
-        "result.json": {
-          "description": "Stable in/out frame bounds (in_frame, out_frame), video FPS, frame dimensions (bg_width, bg_height), relative paths to median background images, and per-window time ranges (median_window_times)",
+        "single_channel.png": {
+          "description": "Single-channel image derived from the Pass 0 midpoint median (V − S/2 in HSV space); used for near-baseline court outline tracking",
           "depends_on": [
-            { "type": "source_video" }
+            { "type": "artifact", "pass": "pass0", "file": "medians/median_NNN.png" },
+            { "type": "setting", "pass": "pass0", "name": "k1" },
+            { "type": "setting", "pass": "pass0", "name": "court_corners" }
           ]
         },
-        "median_background_N.png": {
-          "description": "Median background image for stable window N (N = 0, 1, …); pixel-wise median of sampled frames; used as background plate for motion detection, background subtraction, and cross-fade transitions",
+        "result.json": {
+          "description": "Image dimensions (bg_width, bg_height), median chunk index used, and sample point pairs (sx,sy)→(px1,py1)/(px2,py2) along the near baseline in distorted image space",
           "depends_on": [
-            { "type": "source_video" },
-            { "type": "artifact", "pass": "pass1", "file": "result.json" }
+            { "type": "artifact", "pass": "pass0", "file": "medians/median_NNN.png" },
+            { "type": "setting", "pass": "pass0", "name": "k1" },
+            { "type": "setting", "pass": "pass0", "name": "court_corners" }
           ]
         }
       },
       "accepted_artifacts": {
         "tent_mask.png": {
-          "description": "Binary mask (white = inside court volume silhouette, black = outside) derived by projecting the 3D court geometry onto the background plate; used by Pass 3 to restrict background colour sampling and by Pass 4 as a detection mask",
+          "description": "Binary mask (white = inside court volume silhouette, black = outside) derived by projecting the Pass 0 court geometry onto the background plate; used by Pass 3 and Pass 4 as a detection mask",
           "depends_on": [
-            { "type": "artifact", "pass": "pass1", "file": "median_background_N.png" },
-            { "type": "setting", "pass": "pass1", "name": "court_corners" }
+            { "type": "setting", "pass": "pass0", "name": "court_corners" }
           ]
         }
       },
-      "settings": {
-        "court_corners": {
-          "description": "Pixel coordinates of the four court corners in background plate space; user drags handles in the SVG overlay editor; defaults are computed by the calibration algorithm",
-          "type": "object",
-          "schema": {
-            "top_left":     { "x": "number", "y": "number" },
-            "top_right":    { "x": "number", "y": "number" },
-            "bottom_left":  { "x": "number", "y": "number" },
-            "bottom_right": { "x": "number", "y": "number" }
-          }
-        }
-      }
+      "settings": {}
     },
     "pass2": {
       "name": "Ball Annotation",
