@@ -22,9 +22,9 @@ from pbva_core.types import (
     Pass0AcceptedOutput,
     Pass0RawResult,
     Pass1AcceptedOutput,
+    Pass1ChunkProfiles,
     Pass1CourtLine,
     Pass1RawResult,
-    Pass1Sample,
     Pass1SamplePoint,
 )
 from pbva_pipeline.base import PassContext
@@ -187,7 +187,7 @@ def _court_to_image(
     return _distort(xu, yu, cx, cy, k1, scale)
 
 
-def _sample_court_line(
+def _compute_line_geometry(
     H: np.ndarray,
     u0: float, v0: float,
     u1: float, v1: float,
@@ -195,20 +195,14 @@ def _sample_court_line(
     cx: float, cy: float,
     k1: float, scale: float,
     perp_seg_length_px: float,
-    perp_seg_points: int,
-    single_ch: np.ndarray,
 ) -> list[Pass1SamplePoint]:
-    """Sample n_interior interior points equally spaced by arc length along the
-    distorted image curve traced by court line (u0,v0)→(u1,v1).
+    """Compute n_interior sample-point geometries equally spaced by arc length
+    along the distorted image curve traced by court line (u0,v0)→(u1,v1).
 
-    The curve is densely sampled in court-coord space and mapped to distorted
-    image coordinates; cumulative arc length is computed, then np.interp places
-    the interior points at equal arc-length fractions.  The local tangent at
-    each point is estimated by a central finite difference along the arc.
+    Returns Pass1SamplePoint objects (positions only, no sample values).
     """
     DENSE = 500
 
-    # Dense sample of the distorted curve.
     ts = np.linspace(0.0, 1.0, DENSE + 1)
     du, dv = u1 - u0, v1 - v0
     pts = np.array([
@@ -216,20 +210,16 @@ def _sample_court_line(
         for t in ts
     ])  # (DENSE+1, 2)
 
-    # Cumulative arc length along the distorted curve.
     seg_lens = np.hypot(*(np.diff(pts, axis=0).T))
     cumlen = np.concatenate([[0.0], np.cumsum(seg_lens)])
     total = float(cumlen[-1])
     if total < 1e-6:
         raise ValueError(f"Degenerate court line in image space: ({u0},{v0}) → ({u1},{v1})")
 
-    # Arc-length positions for equally-spaced interior points.
     targets = np.linspace(0.0, total, n_interior + 2)[1:-1]
-
     sx_vals = np.interp(targets, cumlen, pts[:, 0])
     sy_vals = np.interp(targets, cumlen, pts[:, 1])
 
-    # Local tangent via central difference along the arc (1% of total length).
     h = total * 0.01
     fwd = np.minimum(targets + h, total)
     bwd = np.maximum(targets - h, 0.0)
@@ -241,38 +231,46 @@ def _sample_court_line(
     perp_xs = -tan_y  # 90° CCW
     perp_ys =  tan_x
 
-    n_samp = max(2, perp_seg_points)
     points: list[Pass1SamplePoint] = []
-
     for sx, sy, perp_x, perp_y in zip(sx_vals, sy_vals, perp_xs, perp_ys):
         sx, sy = float(sx), float(sy)
         perp_x, perp_y = float(perp_x), float(perp_y)
-
         px1 = sx + perp_seg_length_px * perp_x
         py1 = sy + perp_seg_length_px * perp_y
         px2 = sx - perp_seg_length_px * perp_x
         py2 = sy - perp_seg_length_px * perp_y
-
-        samples: list[Pass1Sample] = []
-        for j in range(n_samp):
-            s = -1.0 + 2.0 * j / (n_samp - 1)
-            samp_x = sx + s * perp_seg_length_px * perp_x
-            samp_y = sy + s * perp_seg_length_px * perp_y
-            samples.append(Pass1Sample(
-                s=round(s, 6),
-                x=round(samp_x, 2),
-                y=round(samp_y, 2),
-                val=round(_bilinear(single_ch, samp_x, samp_y), 3),
-            ))
-
         points.append(Pass1SamplePoint(
             sx=round(sx, 2), sy=round(sy, 2),
             px1=round(px1, 2), py1=round(py1, 2),
             px2=round(px2, 2), py2=round(py2, 2),
-            samples=samples,
         ))
 
     return points
+
+
+def _sample_line_vals(
+    single_ch: np.ndarray,
+    points: list[Pass1SamplePoint],
+    perp_seg_length_px: float,
+    perp_seg_points: int,
+) -> list[list[float]]:
+    """Sample the blurred V−S/2 image along each point's perpendicular segment.
+
+    Returns vals[point_idx][sample_idx].  Perpendicular direction is recovered
+    from the stored (px1,py1) endpoint and (sx,sy) centre.
+    """
+    n_samp = max(2, perp_seg_points)
+    result: list[list[float]] = []
+    for pt in points:
+        perp_x = (pt.px1 - pt.sx) / perp_seg_length_px
+        perp_y = (pt.py1 - pt.sy) / perp_seg_length_px
+        vals: list[float] = []
+        for j in range(n_samp):
+            s = -1.0 + 2.0 * j / (n_samp - 1)
+            vals.append(round(_bilinear(single_ch, pt.sx + s * perp_seg_length_px * perp_x,
+                                                   pt.sy + s * perp_seg_length_px * perp_y), 3))
+        result.append(vals)
+    return result
 
 
 def track_court_outline(
@@ -282,27 +280,23 @@ def track_court_outline(
     median_index: int,
     perp_seg_length_px: float = 64,
     perp_seg_points: int = 64,
-) -> tuple[np.ndarray, list[Pass1CourtLine]]:
-    """Sample perpendicular profiles across the near baseline and near sidelines.
+    on_chunk: object = None,
+) -> tuple[int, int, list[Pass1CourtLine], list[Pass1ChunkProfiles]]:
+    """Compute perpendicular-segment geometry and sample all pass0 medians.
 
-    Returns (single_channel_image, court_lines) where court_lines contains
-    five Pass1CourtLine objects.
+    Returns (bg_width, bg_height, court_lines, chunks) where court_lines holds
+    the chunk-independent geometry and chunks holds per-median sampled values.
     """
-    # Load and convert median image to single channel V - S/2.
-    median_path = pass0_medians_dir / f"median_{median_index:03d}.png"
-    bgr = cv2.imread(str(median_path))
-    if bgr is None:
-        raise FileNotFoundError(f"Median image not found: {median_path}")
+    # Use midpoint median for image dimensions and homography (geometry is chunk-independent).
+    midpoint_path = pass0_medians_dir / f"median_{median_index:03d}.png"
+    bgr_mid = cv2.imread(str(midpoint_path))
+    if bgr_mid is None:
+        raise FileNotFoundError(f"Median image not found: {midpoint_path}")
 
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.int16)
-    single = np.clip(hsv[:, :, 2] - hsv[:, :, 1] // 2, 0, 255).astype(np.uint8)
-    single = cv2.GaussianBlur(single, (0, 0), sigmaX=2, sigmaY=2)
-
-    bg_h, bg_w = bgr.shape[:2]
+    bg_h, bg_w = bgr_mid.shape[:2]
     cx, cy = bg_w / 2.0, bg_h / 2.0
     scale = math.sqrt(cx * cx + cy * cy)
 
-    # Build homography from undistorted corners so court coords → undistorted image.
     def _uc(c: CourtCorner) -> CourtCorner:
         ux, uy = _undistort(c.x, c.y, cx, cy, k1, scale)
         return CourtCorner(x=ux, y=uy)
@@ -314,48 +308,46 @@ def track_court_outline(
         bottom_right=_uc(corners.bottom_right),
     ))
 
-    kwargs: dict = dict(
-        H=H, cx=cx, cy=cy, k1=k1, scale=scale,
-        perp_seg_length_px=perp_seg_length_px,
-        perp_seg_points=perp_seg_points,
-        single_ch=single,
-    )
-
-    # Near kitchen line is at v = 1 - COURT_KV in normalised court coords.
+    geo_kw: dict = dict(H=H, cx=cx, cy=cy, k1=k1, scale=scale, perp_seg_length_px=perp_seg_length_px)
     kitchen_v = 1 - COURT_KV
 
-    # Baseline: 12 equally-spaced interior points; use pts[1:5] (left side) and
-    # pts[7:11] (right side), dropping points adjacent to corners and near the centre.
-    baseline_all = _sample_court_line(u0=0, v0=1, u1=1, v1=1, n_interior=12, **kwargs)
-
-    # Sidelines: 5 equally-spaced interior points; drop pts[0] (closest to corner).
-    left_all  = _sample_court_line(u0=0, v0=1, u1=0, v1=kitchen_v, n_interior=5, **kwargs)
-    right_all = _sample_court_line(u0=1, v0=1, u1=1, v1=kitchen_v, n_interior=5, **kwargs)
+    # ── Geometry (chunk-independent) ──────────────────────────────────────────
+    baseline_all = _compute_line_geometry(u0=0,   v0=1,         u1=1,   v1=1,         n_interior=12, **geo_kw)
+    left_all     = _compute_line_geometry(u0=0,   v0=1,         u1=0,   v1=kitchen_v, n_interior=5,  **geo_kw)
+    right_all    = _compute_line_geometry(u0=1,   v0=1,         u1=1,   v1=kitchen_v, n_interior=5,  **geo_kw)
 
     court_lines = [
-        Pass1CourtLine(
-            name="near_baseline", color="#0ff",
-            points=baseline_all[1:5] + baseline_all[7:11],
-        ),
-        Pass1CourtLine(
-            name="left_sideline", color="#f0f",
-            points=left_all[1:5],
-        ),
-        Pass1CourtLine(
-            name="right_sideline", color="#ff0",
-            points=right_all[1:5],
-        ),
-        Pass1CourtLine(
-            name="near_centerline", color="#0f0",
-            points=_sample_court_line(u0=0.5, v0=1,         u1=0.5, v1=kitchen_v, n_interior=4, **kwargs),
-        ),
-        Pass1CourtLine(
-            name="near_kitchen_line", color="#f80",
-            points=_sample_court_line(u0=0,   v0=kitchen_v, u1=1,   v1=kitchen_v, n_interior=4, **kwargs),
-        ),
+        Pass1CourtLine(name="near_baseline",    color="#0ff", points=baseline_all[1:5] + baseline_all[7:11]),
+        Pass1CourtLine(name="left_sideline",    color="#f0f", points=left_all[1:5]),
+        Pass1CourtLine(name="right_sideline",   color="#ff0", points=right_all[1:5]),
+        Pass1CourtLine(name="near_centerline",  color="#0f0",
+                       points=_compute_line_geometry(u0=0.5, v0=1, u1=0.5, v1=kitchen_v, n_interior=4, **geo_kw)),
+        Pass1CourtLine(name="near_kitchen_line", color="#f80",
+                       points=_compute_line_geometry(u0=0, v0=kitchen_v, u1=1, v1=kitchen_v, n_interior=4, **geo_kw)),
     ]
 
-    return single, court_lines
+    # ── Per-chunk sampling ─────────────────────────────────────────────────────
+    median_paths = sorted(pass0_medians_dir.glob("median_*.png"))
+    chunks: list[Pass1ChunkProfiles] = []
+
+    for idx, path in enumerate(median_paths):
+        if callable(on_chunk):
+            on_chunk(idx, len(median_paths))
+        chunk_index = int(path.stem.split("_")[1])
+        bgr = cv2.imread(str(path))
+        if bgr is None:
+            continue
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.int16)
+        single = np.clip(hsv[:, :, 2] - hsv[:, :, 1] // 2, 0, 255).astype(np.uint8)
+        single = cv2.GaussianBlur(single, (0, 0), sigmaX=2, sigmaY=2)
+        vals = [
+            _sample_line_vals(single, line.points, perp_seg_length_px, perp_seg_points)
+            for line in court_lines
+        ]
+        chunks.append(Pass1ChunkProfiles(chunk_index=chunk_index, vals=vals))
+
+    chunks.sort(key=lambda c: c.chunk_index)
+    return bg_w, bg_h, court_lines, chunks
 
 
 # ─── Pass class ───────────────────────────────────────────────────────────────
@@ -388,34 +380,37 @@ class Pass1:
         medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
         median_index = pass0_raw.midpoint_chunk
 
-        progress.update(0.2, "track_outline", "Computing baseline sample points…")
+        progress.update(0.2, "track_outline", "Computing court-line geometry…")
         progress.check_cancelled()
 
         perp_seg_length_px: float = 64
         perp_seg_points: int = 64
-        single_ch, court_lines = track_court_outline(
+
+        def _on_chunk(i: int, total: int) -> None:
+            progress.update(0.2 + 0.6 * i / total, "sampling", f"Sampling median {i + 1}/{total}…")
+            progress.check_cancelled()
+
+        bg_w, bg_h, court_lines, chunks = track_court_outline(
             corners=pass0_accepted.court_geometry,
             k1=pass0_accepted.k1,
             pass0_medians_dir=medians_dir,
             median_index=median_index,
             perp_seg_length_px=perp_seg_length_px,
             perp_seg_points=perp_seg_points,
+            on_chunk=_on_chunk,
         )
 
         progress.update(0.8, "write_outputs", "Writing raw outputs…")
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
-
-        cv2.imwrite(str(raw_dir / "single_channel.png"), single_ch)
-
-        bg_h, bg_w = single_ch.shape[:2]
         result = Pass1RawResult(
             bg_width=bg_w,
             bg_height=bg_h,
-            median_chunk_index=median_index,
+            midpoint_chunk_index=median_index,
             perp_seg_length_px=perp_seg_length_px,
             perp_seg_points=perp_seg_points,
             court_lines=court_lines,
+            chunks=chunks,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
 
@@ -427,7 +422,6 @@ class Pass1:
         return [
             a for a in [
                 {"role": "raw", "type": "json", "path": str(raw_dir / "result.json")},
-                {"role": "raw", "type": "png",  "path": str(raw_dir / "single_channel.png")},
             ]
             if Path(a["path"]).exists()
         ]

@@ -133,13 +133,6 @@ class CourtGeometry(BaseModel):
     net_right: CourtCorner | None = None
 
 
-class Pass1Sample(BaseModel):
-    s: float    # position along segment, -1 (px2 end) to +1 (px1 end)
-    x: float    # distorted image x
-    y: float    # distorted image y
-    val: float  # V - S/2 value at this point (bilinear interpolated)
-
-
 class Pass1SamplePoint(BaseModel):
     sx: float   # distorted image coords of baseline interior point
     sy: float
@@ -147,7 +140,6 @@ class Pass1SamplePoint(BaseModel):
     py1: float
     px2: float  # distorted image coords of -perp_seg_length_px displacement
     py2: float
-    samples: list[Pass1Sample] = []
 
 
 class Pass1CourtLine(BaseModel):
@@ -156,13 +148,19 @@ class Pass1CourtLine(BaseModel):
     points: list[Pass1SamplePoint]
 
 
+class Pass1ChunkProfiles(BaseModel):
+    chunk_index: int
+    vals: list[list[list[float]]]   # [line_idx][point_idx][sample_idx]
+
+
 class Pass1RawResult(BaseModel):
     bg_width: int
     bg_height: int
-    median_chunk_index: int
+    midpoint_chunk_index: int
     perp_seg_length_px: float
     perp_seg_points: int
-    court_lines: list[Pass1CourtLine]
+    court_lines: list[Pass1CourtLine]   # geometry only, chunk-independent
+    chunks: list[Pass1ChunkProfiles]    # per-chunk sampled values
 
 
 class Pass1CorrectionPayload(BaseModel):

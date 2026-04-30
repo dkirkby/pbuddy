@@ -75,8 +75,6 @@ export interface Pass0CorrectionPayload {
 
 export interface Pass1Sample {
   s: number    // -1 to +1 along segment
-  x: number
-  y: number
   val: number  // V - S/2 value
 }
 
@@ -84,7 +82,7 @@ export interface Pass1SamplePoint {
   sx: number; sy: number
   px1: number; py1: number
   px2: number; py2: number
-  samples: Pass1Sample[]
+  samples?: Pass1Sample[]  // not stored in JSON; reconstructed on the frontend
 }
 
 export interface Pass1CourtLine {
@@ -93,13 +91,19 @@ export interface Pass1CourtLine {
   points: Pass1SamplePoint[]
 }
 
+export interface Pass1ChunkProfiles {
+  chunk_index: number
+  vals: number[][][]  // [line_idx][point_idx][sample_idx]
+}
+
 export interface Pass1RawResult {
   bg_width: number
   bg_height: number
-  median_chunk_index: number
+  midpoint_chunk_index: number
   perp_seg_length_px: number
   perp_seg_points: number
-  court_lines: Pass1CourtLine[]
+  court_lines: Pass1CourtLine[]    // geometry only, chunk-independent
+  chunks: Pass1ChunkProfiles[]     // per-chunk sampled values
 }
 
 export interface Pass1CorrectionPayload {

@@ -46,14 +46,6 @@
     "pass1": {
       "name": "Near-Baseline Court Outline",
       "raw_artifacts": {
-        "single_channel.png": {
-          "description": "Single-channel image derived from the Pass 0 midpoint median (V − S/2 in HSV space); used for near-baseline court outline tracking",
-          "depends_on": [
-            { "type": "artifact", "pass": "pass0", "file": "medians/median_NNN.png" },
-            { "type": "setting", "pass": "pass0", "name": "k1" },
-            { "type": "setting", "pass": "pass0", "name": "court_corners" }
-          ]
-        },
         "result.json": {
           "description": "Image dimensions (bg_width, bg_height), median chunk index used, and sample point pairs (sx,sy)→(px1,py1)/(px2,py2) along the near baseline in distorted image space",
           "depends_on": [
