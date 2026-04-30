@@ -279,7 +279,7 @@ def track_court_outline(
     pass0_medians_dir: Path,
     median_index: int,
     perp_seg_length_px: float = 64,
-    perp_seg_points: int = 64,
+    perp_seg_points: int = 128,
     on_chunk: object = None,
 ) -> tuple[int, int, list[Pass1CourtLine], list[Pass1ChunkProfiles]]:
     """Compute perpendicular-segment geometry and sample all pass0 medians.
@@ -384,7 +384,7 @@ class Pass1:
         progress.check_cancelled()
 
         perp_seg_length_px: float = 64
-        perp_seg_points: int = 64
+        perp_seg_points: int = 128
 
         def _on_chunk(i: int, total: int) -> None:
             progress.update(0.2 + 0.6 * i / total, "sampling", f"Sampling median {i + 1}/{total}…")

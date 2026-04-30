@@ -12,6 +12,21 @@ const PAD = { top: 2, right: 2, bottom: 2, left: 2 }
 const INNER_W = PLOT_W - PAD.left - PAD.right
 const INNER_H = PLOT_H - PAD.top - PAD.bottom
 
+// Max gradient of a Gaussian-blurred step with amplitude 128 and sigma=2 px.
+const GAUSS_SIGMA = 2
+const GRAD_LIMIT = 128 / (Math.sqrt(2 * Math.PI) * GAUSS_SIGMA)
+
+function npGradient(samples: Pass1Sample[]): Pass1Sample[] {
+  const n = samples.length
+  if (n < 2) return samples.map(s => ({ ...s, val: 0 }))
+  return samples.map((s, i) => ({
+    ...s,
+    val: i === 0       ? samples[1].val - samples[0].val
+       : i === n - 1   ? samples[n - 1].val - samples[n - 2].val
+       : (samples[i + 1].val - samples[i - 1].val) / 2,
+  }))
+}
+
 function SegmentPlot({ pt, index, color, midpointSamples }: {
   pt: Pass1SamplePoint; index: number; color: string
   midpointSamples?: Pass1Sample[]
@@ -19,21 +34,25 @@ function SegmentPlot({ pt, index, color, midpointSamples }: {
   if (!pt.samples?.length) return null
 
   const toX = (s: number) => ((s + 1) / 2) * INNER_W
-  const toY = (v: number) => INNER_H - (v / 255) * INNER_H
+  const toY = (v: number) => (INNER_H / 2) * (1 - v / GRAD_LIMIT)
   const pts = (samples: Pass1Sample[]) =>
     samples.map(s => `${toX(s.s).toFixed(1)},${toY(s.val).toFixed(1)}`).join(' ')
   const xMid = toX(0)
+  const yZero = toY(0)
   const label = String.fromCharCode(65 + index)
+  const grad = npGradient(pt.samples)
+  const refGrad = midpointSamples && midpointSamples.length > 0 ? npGradient(midpointSamples) : null
 
   return (
     <svg viewBox={`0 0 ${PLOT_W} ${PLOT_H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
       <g transform={`translate(${PAD.left},${PAD.top})`}>
         <rect x={0} y={0} width={INNER_W} height={INNER_H} fill="#111" stroke="#444" strokeWidth={0.5} />
+        <line x1={0} y1={yZero} x2={INNER_W} y2={yZero} stroke="#555" strokeWidth={0.5} strokeDasharray="2,2" />
         <line x1={xMid} y1={0} x2={xMid} y2={INNER_H} stroke="#555" strokeWidth={0.5} strokeDasharray="2,2" />
-        {midpointSamples && midpointSamples.length > 0 && (
-          <polyline points={pts(midpointSamples)} fill="none" stroke={color} strokeWidth={0.75} strokeOpacity={0.5} strokeDasharray="2,2" />
+        {refGrad && (
+          <polyline points={pts(refGrad)} fill="none" stroke={color} strokeWidth={0.75} strokeOpacity={0.5} strokeDasharray="2,2" />
         )}
-        <polyline points={pts(pt.samples)} fill="none" stroke={color} strokeWidth={1} />
+        <polyline points={pts(grad)} fill="none" stroke={color} strokeWidth={1} />
         <text x={2} y={INNER_H - 2} fontSize={7} fill={color} opacity={0.75}>{label}</text>
       </g>
     </svg>
