@@ -310,6 +310,7 @@ export default function Pass0Page() {
 
   const [corners, setCorners] = useState<CourtGeometry | null>(null)
   const [k1, setK1] = useState(0)
+  // null = track midpoint automatically; number = explicit user selection
   const [chunkIndex, setChunkIndex] = useState<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -358,13 +359,6 @@ export default function Pass0Page() {
     setIsDirty(false)
   }, [rawResult, corrResp])
 
-  // Initialise slider to midpoint once result loads (only on first load).
-  useEffect(() => {
-    if (rawResult && chunkIndex === null) {
-      setChunkIndex(rawResult.midpoint_chunk)
-    }
-  }, [rawResult, chunkIndex])
-
   function handleCornersChange(g: CourtGeometry) {
     setCorners(g)
     setIsDirty(true)
@@ -412,7 +406,7 @@ export default function Pass0Page() {
   const chunkSizeSec  = Math.round(4 * fps) / fps   // matches backend chunk_size / fps
 
   const effectiveChunk = chunkIndex ?? midpointChunk
-  const isAtMidpoint   = effectiveChunk === midpointChunk
+  const isAtMidpoint   = chunkIndex === null
 
   const bgArtifact = bgArtifacts[effectiveChunk] ?? null
   const bgUrl      = bgArtifact ? api.artifactUrl(bgArtifact.id) : null
@@ -503,7 +497,7 @@ export default function Pass0Page() {
                   style={{ flex: 1 }}
                 />
                 <button
-                  onClick={() => setChunkIndex(midpointChunk)}
+                  onClick={() => setChunkIndex(null)}
                   disabled={isAtMidpoint}
                   style={{ fontSize: 12, padding: '2px 8px', whiteSpace: 'nowrap' }}
                 >
