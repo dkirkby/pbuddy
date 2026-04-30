@@ -126,17 +126,19 @@ export default function Pass1Page() {
     }))
   }, [rawResult, chunkPos])
 
-  const midpointCourtLines: Pass1CourtLine[] = useMemo(() => {
+  const refCourtLines: Pass1CourtLine[] = useMemo(() => {
     if (!rawResult) return []
     const midPos = rawResult.chunks.findIndex(c => c.chunk_index === rawResult.midpoint_chunk_index)
-    if (midPos < 0 || midPos === chunkPos) return []  // omit when already showing midpoint
-    const midChunk = rawResult.chunks[midPos]
+    if (midPos < 0 || chunkPos === midPos) return []
+    const refPos = chunkPos > midPos ? chunkPos - 1 : chunkPos + 1
+    const refChunk = rawResult.chunks[refPos]
+    if (!refChunk) return []
     const n = rawResult.perp_seg_points
     return rawResult.court_lines.map((line, li) => ({
       ...line,
       points: line.points.map((pt, pi) => ({
         ...pt,
-        samples: (midChunk.vals[li]?.[pi] ?? []).map((val, j): Pass1Sample => ({
+        samples: (refChunk.vals[li]?.[pi] ?? []).map((val, j): Pass1Sample => ({
           s: n > 1 ? -1 + 2 * j / (n - 1) : 0,
           val,
         })),
@@ -308,7 +310,7 @@ export default function Pass1Page() {
         <div style={{ marginTop: 12 }}>
           {displayCourtLines.map((line, li) => (
             <CourtLineGrid key={line.name} line={line}
-              midpointLine={midpointCourtLines[li]} />
+              midpointLine={refCourtLines[li]} />
           ))}
         </div>
       )}

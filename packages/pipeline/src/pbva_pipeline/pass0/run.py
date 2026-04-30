@@ -1,4 +1,4 @@
-"""Pass 0 orchestration — median image and camera model specification."""
+"""Pass 0 orchestration — chunked median images and camera model specification."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from pbva_core.types import (
     Pass0RawResult,
 )
 from pbva_pipeline.base import PassContext
+
+BG_SUBSAMPLE = 10   # use every Nth frame within each chunk for the median
 
 
 def _default_court(bg_w: int, bg_h: int) -> CourtGeometry:
@@ -36,54 +38,82 @@ class Pass0:
             from pbva_pipeline.base import NullProgress
             progress = NullProgress()
 
-        progress.update(0.0, "sample_frames", "Sampling frames for median…")
+        progress.update(0.0, "setup", "Opening video…")
         progress.check_cancelled()
 
         cap = cv2.VideoCapture(str(ctx.video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {ctx.video_path}")
+
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or ctx.video_fps or 30.0
+        chunk_size = max(1, round(4.0 * fps))   # 4-second chunks
 
-        n_frames = 30
-        stride = 15
-        midpoint = total_frames // 2
-        half_span = stride * (n_frames - 1) // 2
-        start = max(0, midpoint - half_span)
-        frame_indices = [min(start + i * stride, total_frames - 1) for i in range(n_frames)]
+        n_chunks = max(1, (total_frames + chunk_size - 1) // chunk_size)
+        midpoint_chunk = n_chunks // 2
 
-        frames: list[np.ndarray] = []
-        for i, fi in enumerate(frame_indices):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
-            ok, frame = cap.read()
-            if ok:
-                frames.append(frame)
-            frac = (i + 1) / n_frames * 0.9
-            progress.update(frac, "sample_frames", f"Reading frame {i + 1}/{n_frames}…")
-            progress.check_cancelled()
-        cap.release()
-
-        if not frames:
-            raise RuntimeError("No frames could be read from video")
-
-        progress.update(0.90, "compute_median", "Computing pixel-wise median…")
-        progress.check_cancelled()
-        stack = np.stack(frames, axis=0)
-        median = np.median(stack, axis=0).astype(np.uint8)
-
-        bg_h, bg_w = median.shape[:2]
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(raw_dir / "median.png"), median)
+        medians_dir = raw_dir / "medians"
+        medians_dir.mkdir(parents=True, exist_ok=True)
 
-        result = Pass0RawResult(bg_width=bg_w, bg_height=bg_h)
+        bg_h = bg_w = 0
+        saved_chunks = 0
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        for chunk_idx in range(n_chunks):
+            progress.check_cancelled()
+            progress.update(
+                chunk_idx / n_chunks,
+                "compute_median",
+                f"Chunk {chunk_idx + 1}/{n_chunks}…",
+            )
+
+            chunk_start = chunk_idx * chunk_size
+            chunk_end = min(chunk_start + chunk_size - 1, total_frames - 1)
+
+            # Read chunk sequentially; keep every BG_SUBSAMPLE-th frame.
+            samples: list[np.ndarray] = []
+            for local_i in range(chunk_end - chunk_start + 1):
+                ok, frm = cap.read()
+                if ok and local_i % BG_SUBSAMPLE == 0:
+                    samples.append(frm)
+
+            if not samples:
+                continue
+
+            median = np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
+            if bg_h == 0:
+                bg_h, bg_w = median.shape[:2]
+
+            cv2.imwrite(str(medians_dir / f"median_{chunk_idx:03d}.png"), median)
+            saved_chunks += 1
+
+        cap.release()
+
+        if bg_h == 0:
+            raise RuntimeError("No frames could be read from video")
+
+        result = Pass0RawResult(
+            bg_width=bg_w,
+            bg_height=bg_h,
+            median_count=saved_chunks,
+            midpoint_chunk=midpoint_chunk,
+            video_fps=fps,
+        )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
-        progress.update(1.0, "write_outputs", "Pass 0 complete")
+        progress.update(1.0, "write_outputs", f"Pass 0 complete — {saved_chunks} median images")
         return result
 
     def write_raw_outputs(self, ctx: PassContext, result: Pass0RawResult) -> list[dict]:
         raw_dir = ctx.paths.pass_raw_dir
-        return [
-            {"role": "raw", "type": "json", "path": str(raw_dir / "result.json")},
-            {"role": "raw", "type": "png",  "path": str(raw_dir / "median.png")},
-        ]
+        outputs = [{"role": "raw", "type": "json", "path": str(raw_dir / "result.json")}]
+        medians_dir = raw_dir / "medians"
+        if medians_dir.exists():
+            for png in sorted(medians_dir.glob("median_*.png")):
+                outputs.append({"role": "raw", "type": "png", "path": str(png)})
+        return outputs
 
     def validate_corrections(self, payload: dict) -> Pass0CorrectionPayload:
         return Pass0CorrectionPayload.model_validate(payload)

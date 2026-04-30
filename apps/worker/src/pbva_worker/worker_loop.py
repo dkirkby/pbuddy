@@ -76,6 +76,13 @@ def _write_event(session, project_id: str, job_id: str | None, event_type: str, 
 
 def _register_artifacts(session, project_id: str, pass_name: str, job_id: str, artifacts: list[dict]) -> list[str]:
     """Write artifact rows to DB and return the list of artifact IDs."""
+    from sqlalchemy import delete
+    session.execute(
+        delete(Artifact)
+        .where(Artifact.project_id == project_id)
+        .where(Artifact.pass_name == pass_name)
+        .where(Artifact.artifact_role == "raw")
+    )
     ids = []
     for art in artifacts:
         art_id = str(uuid.uuid4())

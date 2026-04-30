@@ -109,10 +109,11 @@ interface OverlayProps {
   imageHeight: number
   k1: number
   onChange: (g: CourtGeometry) => void
+  draggable?: boolean
   strokeScale?: number
 }
 
-function DistortedCourtOverlay({ geometry, imageWidth, imageHeight, k1, onChange, strokeScale = 1 }: OverlayProps) {
+function DistortedCourtOverlay({ geometry, imageWidth, imageHeight, k1, onChange, draggable = true, strokeScale = 1 }: OverlayProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState<CornerKey | null>(null)
 
@@ -130,7 +131,7 @@ function DistortedCourtOverlay({ geometry, imageWidth, imageHeight, k1, onChange
   }
 
   function onMouseMove(e: React.MouseEvent) {
-    if (!dragging) return
+    if (!dragging || !draggable) return
     onChange({ ...geometry, [dragging]: toImageCoords(e.clientX, e.clientY) })
   }
 
@@ -160,10 +161,10 @@ function DistortedCourtOverlay({ geometry, imageWidth, imageHeight, k1, onChange
         const c = geometry[key] as CourtCorner
         return (
           <circle key={key} cx={c.x} cy={c.y} r={10 * strokeScale}
-            fill="#f00" fillOpacity={dragging === key ? 0.9 : 0.6}
+            fill="#f00" fillOpacity={dragging === key ? 0.9 : (draggable ? 0.6 : 0.3)}
             stroke="#fff" strokeWidth={2 * strokeScale}
-            style={{ cursor: 'grab' }}
-            onMouseDown={(e) => { e.stopPropagation(); setDragging(key) }} />
+            style={{ cursor: draggable ? 'grab' : 'default' }}
+            onMouseDown={draggable ? (e) => { e.stopPropagation(); setDragging(key) } : undefined} />
         )
       })}
     </svg>
@@ -191,9 +192,10 @@ interface ZoomBoxProps {
   bgH: number
   k1: number
   onChange: (g: CourtGeometry) => void
+  draggable?: boolean
 }
 
-function CornerZoomBox({ cornerKey, geometry, bgUrl, bgW, bgH, k1, onChange }: ZoomBoxProps) {
+function CornerZoomBox({ cornerKey, geometry, bgUrl, bgW, bgH, k1, onChange, draggable = true }: ZoomBoxProps) {
   const corner = geometry[cornerKey] as CourtCorner
   const geometryRef = useRef(geometry)
   geometryRef.current = geometry
@@ -274,9 +276,10 @@ function CornerZoomBox({ cornerKey, geometry, bgUrl, bgW, bgH, k1, onChange }: Z
               stroke="#f00" strokeWidth={0.5} strokeOpacity={0.7} />
         {/* Draggable handle — always at box centre; drag moves corner via movementX/Y */}
         <circle cx={BOX_W / 2} cy={BOX_H / 2} r={10}
-          fill="#f00" fillOpacity={dragging ? 0.85 : 0.4}
-          stroke="#fff" strokeWidth={1.5} style={{ cursor: 'grab' }}
-          onMouseDown={(e) => { e.preventDefault(); setDragging(true) }} />
+          fill="#f00" fillOpacity={dragging ? 0.85 : (draggable ? 0.4 : 0.15)}
+          stroke="#fff" strokeWidth={1.5}
+          style={{ cursor: draggable ? 'grab' : 'default' }}
+          onMouseDown={draggable ? (e) => { e.preventDefault(); setDragging(true) } : undefined} />
       </svg>
 
       {/* Corner label + live coords */}
@@ -290,6 +293,14 @@ function CornerZoomBox({ cornerKey, geometry, bgUrl, bgW, bgH, k1, onChange }: Z
   )
 }
 
+// ─── Time label helper ────────────────────────────────────────────────────────
+
+function fmtTime(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 // ─── Pass0Page ────────────────────────────────────────────────────────────────
 
 export default function Pass0Page() {
@@ -299,6 +310,7 @@ export default function Pass0Page() {
 
   const [corners, setCorners] = useState<CourtGeometry | null>(null)
   const [k1, setK1] = useState(0)
+  const [chunkIndex, setChunkIndex] = useState<number | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -312,9 +324,16 @@ export default function Pass0Page() {
   const rawJsonArtifact = artifacts.find(
     (a) => a.artifact_role === 'raw' && a.artifact_type === 'json'
   )
-  const bgArtifact = artifacts.find(
-    (a) => a.artifact_role === 'raw' && a.artifact_type === 'png'
-  ) ?? null
+  // All raw PNG artifacts from the medians/ subdir, sorted by path → chunk order.
+  // Re-running pass0 appends duplicate registrations; deduplicate by path keeping the
+  // most recent, then sort by path for correct chunk ordering.
+  const bgArtifacts = (() => {
+    const seen = new Set<string>()
+    return artifacts
+      .filter(a => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('/medians/'))
+      .sort((a, b) => a.path.localeCompare(b.path) || b.created_at.localeCompare(a.created_at))
+      .filter(a => { if (seen.has(a.path)) return false; seen.add(a.path); return true })
+  })()
 
   const { data: rawResult } = useQuery<Pass0RawResult>({
     queryKey: ['pass0-raw', projectId],
@@ -338,6 +357,13 @@ export default function Pass0Page() {
     setK1(corr?.k1 ?? 0)
     setIsDirty(false)
   }, [rawResult, corrResp])
+
+  // Initialise slider to midpoint once result loads (only on first load).
+  useEffect(() => {
+    if (rawResult && chunkIndex === null) {
+      setChunkIndex(rawResult.midpoint_chunk)
+    }
+  }, [rawResult, chunkIndex])
 
   function handleCornersChange(g: CourtGeometry) {
     setCorners(g)
@@ -380,7 +406,23 @@ export default function Pass0Page() {
     }
   }
 
-  const bgUrl = bgArtifact ? api.artifactUrl(bgArtifact.id) : null
+  const midpointChunk = rawResult?.midpoint_chunk ?? 0
+  const totalChunks   = rawResult?.median_count   ?? bgArtifacts.length
+  const fps           = rawResult?.video_fps       ?? 30
+  const chunkSizeSec  = Math.round(4 * fps) / fps   // matches backend chunk_size / fps
+
+  const effectiveChunk = chunkIndex ?? midpointChunk
+  const isAtMidpoint   = effectiveChunk === midpointChunk
+
+  const bgArtifact = bgArtifacts[effectiveChunk] ?? null
+  const bgUrl      = bgArtifact ? api.artifactUrl(bgArtifact.id) : null
+
+  // Time label for the current chunk
+  const chunkStartSec = effectiveChunk * chunkSizeSec
+  const chunkEndSec   = chunkStartSec + chunkSizeSec
+  const timeLabel     = totalChunks > 0
+    ? `${fmtTime(chunkStartSec)} – ${fmtTime(chunkEndSec)}`
+    : ''
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 24, fontFamily: 'sans-serif' }}>
@@ -441,8 +483,39 @@ export default function Pass0Page() {
           <h3 style={{ marginTop: 0 }}>Median Background</h3>
           <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
             Drag red handles in the main image for coarse positioning.
-            Drag handles in the zoom boxes below for 1/4-pixel precision.
+            Drag handles in the zoom boxes below for 1/4-pixel precision.{' '}
+            <span style={{ color: isAtMidpoint ? '#888' : '#f90' }}>
+              Dragging is only enabled at the midpoint image.
+            </span>
           </p>
+
+          {/* Background image slider */}
+          {totalChunks > 1 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={totalChunks - 1}
+                  step={1}
+                  value={effectiveChunk}
+                  onChange={(e) => setChunkIndex(parseInt(e.target.value, 10))}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  onClick={() => setChunkIndex(midpointChunk)}
+                  disabled={isAtMidpoint}
+                  style={{ fontSize: 12, padding: '2px 8px', whiteSpace: 'nowrap' }}
+                >
+                  ⌖ Midpoint
+                </button>
+              </div>
+              <div style={{ fontSize: 12, color: isAtMidpoint ? '#6b6' : '#aaa', marginTop: 2 }}>
+                {timeLabel}{isAtMidpoint ? ' (midpoint)' : ''}
+                {' '}— chunk {effectiveChunk} of {totalChunks - 1}
+              </div>
+            </div>
+          )}
 
           {/* Main image */}
           <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
@@ -463,6 +536,7 @@ export default function Pass0Page() {
                 imageHeight={rawResult.bg_height}
                 k1={k1}
                 onChange={handleCornersChange}
+                draggable={isAtMidpoint}
               />
             )}
           </div>
@@ -483,6 +557,7 @@ export default function Pass0Page() {
                     bgH={bgH}
                     k1={k1}
                     onChange={handleCornersChange}
+                    draggable={isAtMidpoint}
                   />
                 ))}
               </div>
