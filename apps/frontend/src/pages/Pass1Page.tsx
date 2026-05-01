@@ -12,9 +12,18 @@ const PAD = { top: 2, right: 2, bottom: 2, left: 2 }
 const INNER_W = PLOT_W - PAD.left - PAD.right
 const INNER_H = PLOT_H - PAD.top - PAD.bottom
 
-// Max gradient of a Gaussian-blurred step with amplitude 128 and sigma=2 px.
-const GAUSS_SIGMA = 2
-const GRAD_LIMIT = 128 / (Math.sqrt(2 * Math.PI) * GAUSS_SIGMA)
+function maxAbsGrad(vals: number[]): number {
+  const n = vals.length
+  if (n < 2) return 0
+  let max = 0
+  for (let i = 0; i < n; i++) {
+    const dv = i === 0       ? vals[1] - vals[0]
+             : i === n - 1   ? vals[n - 1] - vals[n - 2]
+             : (vals[i + 1] - vals[i - 1]) / 2
+    if (Math.abs(dv) > max) max = Math.abs(dv)
+  }
+  return max
+}
 
 function npGradient(samples: Pass1Sample[]): Pass1Sample[] {
   const n = samples.length
@@ -27,14 +36,15 @@ function npGradient(samples: Pass1Sample[]): Pass1Sample[] {
   }))
 }
 
-function SegmentPlot({ pt, index, color, midpointSamples }: {
+function SegmentPlot({ pt, index, color, midpointSamples, gradLimit }: {
   pt: Pass1SamplePoint; index: number; color: string
   midpointSamples?: Pass1Sample[]
+  gradLimit: number
 }) {
   if (!pt.samples?.length) return null
 
   const toX = (s: number) => ((s + 1) / 2) * INNER_W
-  const toY = (v: number) => (INNER_H / 2) * (1 - v / GRAD_LIMIT)
+  const toY = (v: number) => (INNER_H / 2) * (1 - v / gradLimit)
   const pts = (samples: Pass1Sample[]) =>
     samples.map(s => `${toX(s.s).toFixed(1)},${toY(s.val).toFixed(1)}`).join(' ')
   const xMid = toX(0)
@@ -50,16 +60,16 @@ function SegmentPlot({ pt, index, color, midpointSamples }: {
         <line x1={0} y1={yZero} x2={INNER_W} y2={yZero} stroke="#555" strokeWidth={0.5} strokeDasharray="2,2" />
         <line x1={xMid} y1={0} x2={xMid} y2={INNER_H} stroke="#555" strokeWidth={0.5} strokeDasharray="2,2" />
         {refGrad && (
-          <polyline points={pts(refGrad)} fill="none" stroke={color} strokeWidth={0.75} strokeOpacity={0.5} strokeDasharray="2,2" />
+          <polyline points={pts(refGrad)} fill="none" stroke={color} strokeWidth={0.5} strokeOpacity={0.5} strokeDasharray="2,2" />
         )}
-        <polyline points={pts(grad)} fill="none" stroke={color} strokeWidth={1} />
+        <polyline points={pts(grad)} fill="none" stroke={color} strokeWidth={0.75} />
         <text x={2} y={INNER_H - 2} fontSize={7} fill={color} opacity={0.75}>{label}</text>
       </g>
     </svg>
   )
 }
 
-function CourtLineGrid({ line, midpointLine }: { line: Pass1CourtLine; midpointLine?: Pass1CourtLine }) {
+function CourtLineGrid({ line, midpointLine, gradLimit }: { line: Pass1CourtLine; midpointLine?: Pass1CourtLine; gradLimit: number }) {
   const ROW = 4
   const rows: Pass1SamplePoint[][] = []
   for (let i = 0; i < line.points.length; i += ROW)
@@ -78,7 +88,8 @@ function CourtLineGrid({ line, midpointLine }: { line: Pass1CourtLine; midpointL
             const absIdx = ri * ROW + i
             return (
               <SegmentPlot key={i} pt={pt} index={absIdx} color={line.color}
-                midpointSamples={midpointLine?.points[absIdx]?.samples} />
+                midpointSamples={midpointLine?.points[absIdx]?.samples}
+                gradLimit={gradLimit} />
             )
           })}
         </div>
@@ -164,6 +175,23 @@ export default function Pass1Page() {
       })),
     }))
   }, [rawResult, chunkPos])
+
+  // Per-line gradient limits: max |gradient| across all chunks and all segment points.
+  const lineGradLimits: number[] = useMemo(() => {
+    if (!rawResult) return []
+    return rawResult.court_lines.map((_, li) => {
+      let max = 0
+      for (const chunk of rawResult.chunks) {
+        const lineVals = chunk.vals[li]
+        if (!lineVals) continue
+        for (const ptVals of lineVals) {
+          const m = maxAbsGrad(ptVals)
+          if (m > max) max = m
+        }
+      }
+      return max || 1
+    })
+  }, [rawResult])
 
   const { data: pass0ArtResp } = useQuery({
     queryKey: ['pass0-artifacts', projectId],
@@ -329,7 +357,8 @@ export default function Pass1Page() {
         <div style={{ marginTop: 12 }}>
           {displayCourtLines.map((line, li) => (
             <CourtLineGrid key={line.name} line={line}
-              midpointLine={refCourtLines[li]} />
+              midpointLine={refCourtLines[li]}
+              gradLimit={lineGradLimits[li] ?? 1} />
           ))}
         </div>
       )}
