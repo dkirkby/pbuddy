@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
-import type { ArtifactRef, Pass1CourtLine, Pass1RawResult, Pass1Sample, Pass1SamplePoint } from '../types/api'
+import type { ArtifactRef, Pass1CourtLine, Pass1RawResult, Pass1Sample, Pass1SamplePoint, Pass1SegmentAnalysis } from '../types/api'
 
 // ─── Subplot ──────────────────────────────────────────────────────────────────
 
@@ -36,13 +36,15 @@ function npGradient(samples: Pass1Sample[]): Pass1Sample[] {
   }))
 }
 
-function SegmentPlot({ pt, index, color, midpointSamples, gradLimit }: {
+function SegmentPlot({ pt, index, color, referenceCurve, lagPx, gradLimit }: {
   pt: Pass1SamplePoint; index: number; color: string
-  midpointSamples?: Pass1Sample[]
+  referenceCurve?: number[]   // pre-computed gradient reference (one value per sample)
+  lagPx?: number | null       // lag in pixels for the current chunk
   gradLimit: number
 }) {
   if (!pt.samples?.length) return null
 
+  const n = pt.samples.length
   const toX = (s: number) => ((s + 1) / 2) * INNER_W
   const toY = (v: number) => (INNER_H / 2) * (1 - v / gradLimit)
   const pts = (samples: Pass1Sample[]) =>
@@ -51,7 +53,10 @@ function SegmentPlot({ pt, index, color, midpointSamples, gradLimit }: {
   const yZero = toY(0)
   const label = String.fromCharCode(65 + index)
   const grad = npGradient(pt.samples)
-  const refGrad = midpointSamples && midpointSamples.length > 0 ? npGradient(midpointSamples) : null
+  const refGrad: Pass1Sample[] | null = referenceCurve?.length === n
+    ? referenceCurve.map((val, j) => ({ s: n > 1 ? -1 + 2 * j / (n - 1) : 0, val }))
+    : null
+  const lagLabel = lagPx != null ? `${lagPx > 0 ? '+' : ''}${lagPx.toFixed(1)}` : null
 
   return (
     <svg viewBox={`0 0 ${PLOT_W} ${PLOT_H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
@@ -64,12 +69,21 @@ function SegmentPlot({ pt, index, color, midpointSamples, gradLimit }: {
         )}
         <polyline points={pts(grad)} fill="none" stroke={color} strokeWidth={0.75} />
         <text x={2} y={INNER_H - 2} fontSize={7} fill={color} opacity={0.75}>{label}</text>
+        {lagLabel && (
+          <text x={INNER_W - 1} y={INNER_H - 2} fontSize={6} fill={color} opacity={0.9} textAnchor="end">{lagLabel}px</text>
+        )}
       </g>
     </svg>
   )
 }
 
-function CourtLineGrid({ line, midpointLine, gradLimit }: { line: Pass1CourtLine; midpointLine?: Pass1CourtLine; gradLimit: number }) {
+function CourtLineGrid({ line, lineAnalyses, chunkPos, pixPerSample, gradLimit }: {
+  line: Pass1CourtLine
+  lineAnalyses?: Pass1SegmentAnalysis[]
+  chunkPos: number
+  pixPerSample: number
+  gradLimit: number
+}) {
   const ROW = 4
   const rows: Pass1SamplePoint[][] = []
   for (let i = 0; i < line.points.length; i += ROW)
@@ -86,9 +100,13 @@ function CourtLineGrid({ line, midpointLine, gradLimit }: { line: Pass1CourtLine
         }}>
           {row.map((pt, i) => {
             const absIdx = ri * ROW + i
+            const analysis = lineAnalyses?.[absIdx]
+            const lagSamples = analysis?.lags?.[chunkPos] ?? null
+            const lagPx = lagSamples != null ? lagSamples * pixPerSample : null
             return (
               <SegmentPlot key={i} pt={pt} index={absIdx} color={line.color}
-                midpointSamples={midpointLine?.points[absIdx]?.samples}
+                referenceCurve={analysis?.reference}
+                lagPx={lagPx}
                 gradLimit={gradLimit} />
             )
           })}
@@ -157,25 +175,9 @@ export default function Pass1Page() {
     }))
   }, [rawResult, chunkPos])
 
-  const refCourtLines: Pass1CourtLine[] = useMemo(() => {
-    if (!rawResult?.chunks?.length || !rawResult.court_lines) return []
-    const midPos = rawResult.chunks.findIndex(c => c.chunk_index === rawResult.midpoint_chunk_index)
-    if (midPos < 0 || chunkPos === midPos) return []
-    const refPos = chunkPos > midPos ? chunkPos - 1 : chunkPos + 1
-    const refChunk = rawResult.chunks[refPos]
-    if (!refChunk) return []
-    const n = rawResult.perp_seg_points
-    return rawResult.court_lines.map((line, li) => ({
-      ...line,
-      points: line.points.map((pt, pi) => ({
-        ...pt,
-        samples: (refChunk.vals[li]?.[pi] ?? []).map((val, j): Pass1Sample => ({
-          s: n > 1 ? -1 + 2 * j / (n - 1) : 0,
-          val,
-        })),
-      })),
-    }))
-  }, [rawResult, chunkPos])
+  const pixPerSample = rawResult
+    ? 2 * rawResult.perp_seg_length_px / (rawResult.perp_seg_points - 1)
+    : 1
 
   // Per-line gradient limits: max |gradient| across all chunks and all segment points.
   const lineGradLimits: number[] = useMemo(() => {
@@ -358,7 +360,9 @@ export default function Pass1Page() {
         <div style={{ marginTop: 12 }}>
           {displayCourtLines.map((line, li) => (
             <CourtLineGrid key={line.name} line={line}
-              midpointLine={refCourtLines[li]}
+              lineAnalyses={rawResult?.segment_analyses?.[li]}
+              chunkPos={chunkPos}
+              pixPerSample={pixPerSample}
               gradLimit={lineGradLimits[li] ?? 1} />
           ))}
         </div>

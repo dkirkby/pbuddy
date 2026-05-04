@@ -153,14 +153,21 @@ class Pass1ChunkProfiles(BaseModel):
     vals: list[list[list[float]]]   # [line_idx][point_idx][sample_idx]
 
 
+class Pass1SegmentAnalysis(BaseModel):
+    reference: list[float]              # gradient reference curve, shape (perp_seg_points,)
+    lags: list[float | None]            # per-chunk lag in sample units (None = not clean)
+    similarities: list[float | None]    # per-chunk ZNCC similarity to reference
+
+
 class Pass1RawResult(BaseModel):
     bg_width: int
     bg_height: int
     midpoint_chunk_index: int
     perp_seg_length_px: float
     perp_seg_points: int
-    court_lines: list[Pass1CourtLine]   # geometry only, chunk-independent
-    chunks: list[Pass1ChunkProfiles]    # per-chunk sampled values
+    court_lines: list[Pass1CourtLine]           # geometry only, chunk-independent
+    chunks: list[Pass1ChunkProfiles]            # per-chunk sampled values
+    segment_analyses: list[list[Pass1SegmentAnalysis]] = []  # [line_idx][point_idx]
 
 
 class Pass1CorrectionPayload(BaseModel):

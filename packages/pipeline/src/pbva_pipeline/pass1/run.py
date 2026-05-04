@@ -18,6 +18,7 @@ from pbva_core.types import (
     Pass1ChunkProfiles,
     Pass1CourtLine,
     Pass1RawResult,
+    Pass1SegmentAnalysis,
     Pass1SamplePoint,
 )
 from pbva_pipeline.base import PassContext
@@ -267,6 +268,53 @@ def track_court_outline(
     return bg_w, bg_h, court_lines, chunks
 
 
+# ─── Segment analysis ────────────────────────────────────────────────────────
+
+def _analyse_segments(
+    court_lines: list[Pass1CourtLine],
+    chunks: list[Pass1ChunkProfiles],
+    perp_seg_points: int,
+) -> list[list[Pass1SegmentAnalysis]]:
+    """For each segment, compute a robust gradient reference curve and per-chunk lags."""
+    import io
+    import contextlib
+    from pbva_pipeline.zncc import robust_reference_curve
+
+    nchunks = len(chunks)
+    blank_ref = [0.0] * perp_seg_points
+    result: list[list[Pass1SegmentAnalysis]] = []
+
+    for li, line in enumerate(court_lines):
+        line_analyses: list[Pass1SegmentAnalysis] = []
+        for pi in range(len(line.points)):
+            if nchunks < 2:
+                lags: list[float | None] = [None] * nchunks
+                sims: list[float | None] = [None] * nchunks
+                line_analyses.append(Pass1SegmentAnalysis(
+                    reference=blank_ref, lags=lags, similarities=sims,
+                ))
+                continue
+
+            raw = np.array([chunks[ci].vals[li][pi] for ci in range(nchunks)], dtype=float)
+            grad_curves = np.gradient(raw, axis=1)
+
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    reference, lags_arr, sims_arr = robust_reference_curve(grad_curves)
+                ref = [round(float(v), 4) for v in reference]
+                lags = [None if np.isnan(v) else round(float(v), 4) for v in lags_arr]
+                sims = [None if np.isnan(v) else round(float(v), 4) for v in sims_arr]
+            except Exception:
+                ref = blank_ref
+                lags = [None] * nchunks
+                sims = [None] * nchunks
+
+            line_analyses.append(Pass1SegmentAnalysis(reference=ref, lags=lags, similarities=sims))
+        result.append(line_analyses)
+
+    return result
+
+
 # ─── Pass class ───────────────────────────────────────────────────────────────
 
 class Pass1:
@@ -317,7 +365,11 @@ class Pass1:
             on_chunk=_on_chunk,
         )
 
-        progress.update(0.8, "write_outputs", "Writing raw outputs…")
+        progress.update(0.8, "analyse", "Analysing court line segments…")
+        progress.check_cancelled()
+        segment_analyses = _analyse_segments(court_lines, chunks, perp_seg_points)
+
+        progress.update(0.95, "write_outputs", "Writing raw outputs…")
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
         result = Pass1RawResult(
@@ -328,6 +380,7 @@ class Pass1:
             perp_seg_points=perp_seg_points,
             court_lines=court_lines,
             chunks=chunks,
+            segment_analyses=segment_analyses,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
 
