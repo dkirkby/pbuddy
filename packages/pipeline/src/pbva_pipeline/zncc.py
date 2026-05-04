@@ -250,4 +250,13 @@ def robust_reference_curve(curves, clean_frac=0.9, min_overlap_frac=0.5, n_iter=
         lags[idx] = best_lag
         similarities[idx] = best_sim
 
+    # Estimate lag of the central chunk. Use interpolation in case the central chunk is not clean.
+    lag0 = np.interp(nchunk // 2, np.arange(nchunk), lags)
+
+    # Shift the reference curve by lag0 to align it with the central chunk.
+    reference = shift_curve(reference, lag0)
+
+    # Shift all lags by lag0 to be relative to the central chunk.
+    lags -= lag0
+
     return reference, lags, similarities
