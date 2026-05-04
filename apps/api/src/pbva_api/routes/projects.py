@@ -36,7 +36,8 @@ def _pass_runnable(project_id: str, pass_name: str, data_root: Path) -> bool:
         return (accepted("pass2") / "annotations.json").exists()
     if pass_name == "pass4":
         return (
-            (accepted("pass1") / "tent_mask.png").exists()
+            (accepted("pass0") / "result.json").exists()
+            and (accepted("pass1") / "result.json").exists()
             and (accepted("pass2") / "rally.json").exists()
             and (accepted("pass3") / "HSVmask.npz").exists()
         )

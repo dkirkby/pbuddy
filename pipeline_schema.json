@@ -55,14 +55,6 @@
           ]
         }
       },
-      "accepted_artifacts": {
-        "tent_mask.png": {
-          "description": "Binary mask (white = inside court volume silhouette, black = outside) derived by projecting the Pass 0 court geometry onto the background plate; used by Pass 3 and Pass 4 as a detection mask",
-          "depends_on": [
-            { "type": "setting", "pass": "pass0", "name": "court_corners" }
-          ]
-        }
-      },
       "settings": {}
     },
     "pass2": {
@@ -194,7 +186,7 @@
           "description": "64×64 px composite diagnostic patch for each annotated frame; R=motion, G=color, B=tent, M=!color, C=!motion; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
           "depends_on": [
             { "type": "source_video" },
-            { "type": "artifact", "pass": "pass1", "file": "tent_mask.png" },
+            { "type": "artifact", "pass": "pass0", "file": "result.json" },
             { "type": "setting", "pass": "pass2", "name": "ball_annotations" },
             { "type": "artifact", "pass": "pass3", "file": "HSVmask.npz" }
           ]

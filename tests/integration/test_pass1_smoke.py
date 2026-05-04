@@ -4,11 +4,13 @@ Run with:
     python3 -m pytest tests/integration/test_pass1_smoke.py -m slow -v -s
 
 This test is excluded from the normal suite because it takes several minutes.
+Pass 1 requires Pass 0 accepted output, so this test runs Pass 0 first.
 """
 
 from __future__ import annotations
 
-import os
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,7 @@ TEST_VIDEO = Path(__file__).parent.parent.parent / "test.mp4"
 
 @pytest.mark.slow
 def test_pass1_smoke(tmp_path):
-    """Run Pass 1 directly on test.mp4 and validate the output."""
+    """Run Pass 0 then Pass 1 on test.mp4 and validate Pass 1 output."""
     if not TEST_VIDEO.exists():
         pytest.skip("test.mp4 not available")
 
@@ -27,21 +29,19 @@ def test_pass1_smoke(tmp_path):
     from pbva_core.config import Settings
     from pbva_core import paths as p
     from pbva_pipeline.base import LoggingProgress, PassContext, PassPaths
+    from pbva_pipeline.pass0.run import Pass0
     from pbva_pipeline.pass1.run import Pass1
 
     settings = Settings(data_root=tmp_path / "data")
     project_id = "smoke-test-001"
     p.ensure_project_dirs(settings.data_root, project_id)
 
-    # Copy test video into uploads dir.
     dest = p.uploads_dir(settings.data_root, project_id) / "original.mp4"
     shutil.copy2(TEST_VIDEO, dest)
 
-    # Probe video.
-    import json, subprocess
     probe = subprocess.run(
         ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(dest)],
-        capture_output=True, text=True
+        capture_output=True, text=True,
     )
     meta = json.loads(probe.stdout)
     vs = next(s for s in meta["streams"] if s["codec_type"] == "video")
@@ -50,70 +50,67 @@ def test_pass1_smoke(tmp_path):
     num, den = fps_str.split("/")
     fps = float(num) / float(den)
 
-    pass_paths = PassPaths(
-        project_root=p.project_root(settings.data_root, project_id),
-        uploads_dir=p.uploads_dir(settings.data_root, project_id),
-        derived_dir=p.derived_dir(settings.data_root, project_id),
-        pass_raw_dir=p.pass_raw_dir(settings.data_root, project_id, "pass1"),
-        pass_corrections_dir=p.pass_corrections_dir(settings.data_root, project_id, "pass1"),
-        pass_accepted_dir=p.pass_accepted_dir(settings.data_root, project_id, "pass1"),
-    )
+    def make_ctx(pass_name):
+        return PassContext(
+            project_id=project_id,
+            project_name="Smoke Test",
+            video_path=dest,
+            video_duration_s=duration_s,
+            video_fps=fps,
+            video_width=int(vs["width"]),
+            video_height=int(vs["height"]),
+            paths=PassPaths(
+                project_root=p.project_root(settings.data_root, project_id),
+                uploads_dir=p.uploads_dir(settings.data_root, project_id),
+                derived_dir=p.derived_dir(settings.data_root, project_id),
+                pass_raw_dir=p.pass_raw_dir(settings.data_root, project_id, pass_name),
+                pass_corrections_dir=p.pass_corrections_dir(settings.data_root, project_id, pass_name),
+                pass_accepted_dir=p.pass_accepted_dir(settings.data_root, project_id, pass_name),
+            ),
+            settings=settings,
+            job_id=f"smoke-{pass_name}-001",
+            progress=LoggingProgress(),
+        )
 
-    ctx = PassContext(
-        project_id=project_id,
-        project_name="Smoke Test",
-        video_path=dest,
-        video_duration_s=duration_s,
-        video_fps=fps,
-        video_width=int(vs["width"]),
-        video_height=int(vs["height"]),
-        paths=pass_paths,
-        settings=settings,
-        job_id="smoke-job-001",
-        progress=LoggingProgress(),
-    )
+    # ── Pass 0 ──────────────────────────────────────────────────────────────────
+    print("\nRunning Pass 0…")
+    ctx0 = make_ctx("pass0")
+    pass0 = Pass0()
+    pass0.validate_inputs(ctx0)
+    raw0 = pass0.run(ctx0)
+    pass0.build_accepted_output(ctx0, raw0, corrections=None)
 
+    print(f"Pass 0: {raw0.median_count} medians, midpoint={raw0.midpoint_chunk}")
+
+    # ── Pass 1 ──────────────────────────────────────────────────────────────────
+    print("\nRunning Pass 1…")
+    ctx1 = make_ctx("pass1")
     pass1 = Pass1()
-    pass1.validate_inputs(ctx)
-    result = pass1.run(ctx)
+    pass1.validate_inputs(ctx1)
+    result = pass1.run(ctx1)
 
-    # ── Acceptance criteria ──
-
-    # 1. Stable bounds: in-point < 30s, out-point > 10 min from start.
-    assert result.stable_bounds.in_time_s < 30, (
-        f"Expected in_time_s < 30, got {result.stable_bounds.in_time_s}"
-    )
-    assert result.stable_bounds.out_time_s > 600, (
-        f"Expected out_time_s > 600, got {result.stable_bounds.out_time_s}"
-    )
-    print(f"\nStable bounds: {result.stable_bounds.in_time_s:.1f}s – {result.stable_bounds.out_time_s:.1f}s")
-
-    # 2. Median background image(s) exist and have correct shape.
-    import cv2
-    assert result.median_background_paths, "No median_background_paths in result"
-    for rel_path in result.median_background_paths:
-        bg_path = pass_paths.project_root / rel_path
-        assert bg_path.exists(), f"{rel_path} not written"
-        bg = cv2.imread(str(bg_path))
-        assert bg is not None, f"Could not read {rel_path}"
-        assert bg.shape == (540, 960, 3), f"Expected (540, 960, 3), got {bg.shape}"
-        print(f"Background plate: {bg.shape}, written to {bg_path}")
-
-    # 3. Court overlay exists.
-    overlay_path = pass_paths.pass_raw_dir / "court_overlay.png"
-    assert overlay_path.exists(), "court_overlay.png not written"
-
-    # 4. Court geometry is non-trivial (corners span some area).
-    g = result.court_geometry
-    x_span = max(g.top_right.x, g.bottom_right.x) - min(g.top_left.x, g.bottom_left.x)
-    y_span = max(g.bottom_left.y, g.bottom_right.y) - min(g.top_left.y, g.top_right.y)
-    assert x_span > 50, f"Court x-span too small: {x_span}"
-    assert y_span > 50, f"Court y-span too small: {y_span}"
-    print(f"Court geometry: x_span={x_span:.0f}px, y_span={y_span:.0f}px, confidence={result.confidence}")
-
-    # 5. result.json written.
-    result_json = pass_paths.pass_raw_dir / "result.json"
+    # 1. result.json written.
+    result_json = ctx1.paths.pass_raw_dir / "result.json"
     assert result_json.exists(), "result.json not written"
 
+    # 2. Background dimensions are non-trivial.
+    assert result.bg_width > 0 and result.bg_height > 0, (
+        f"Invalid bg dimensions: {result.bg_width}×{result.bg_height}"
+    )
+    print(f"Background: {result.bg_width}×{result.bg_height}")
+
+    # 3. Five court lines with sample points.
+    assert len(result.court_lines) == 5, f"Expected 5 court lines, got {len(result.court_lines)}"
+    for line in result.court_lines:
+        assert len(line.points) > 0, f"Court line '{line.name}' has no sample points"
+    line_names = [l.name for l in result.court_lines]
+    print(f"Court lines: {line_names}")
+
+    # 4. Chunk profiles cover all pass0 medians.
+    assert len(result.chunks) == raw0.median_count, (
+        f"Expected {raw0.median_count} chunks, got {len(result.chunks)}"
+    )
+    print(f"Chunks: {len(result.chunks)}")
+
     print(f"\nAll acceptance criteria passed for test.mp4.")
-    print(f"Outputs in: {pass_paths.pass_raw_dir}")
+    print(f"Outputs in: {ctx1.paths.pass_raw_dir}")

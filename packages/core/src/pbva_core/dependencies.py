@@ -31,8 +31,7 @@ if _SCHEMA_PATH is None:
 _schema = json.loads(_SCHEMA_PATH.read_text())
 
 # Build the two dependency maps by inspecting every raw artifact's depends_on list.
-# We also check accepted_artifacts, since tent_mask.png in pass1/accepted depends on
-# pass1.court_corners and is used by pass3 and pass4.
+# We also check accepted_artifacts for any accepted-only artifacts with cross-pass deps.
 
 _run_dependents: dict[str, set[str]] = {}
 _settings_dependents: dict[str, set[str]] = {}

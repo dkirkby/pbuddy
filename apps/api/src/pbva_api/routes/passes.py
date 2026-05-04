@@ -88,7 +88,7 @@ def _rebuild_pass0_accepted(db: Session, project_id: str, settings) -> None:
 
 
 def _rebuild_pass1_accepted(db: Session, project_id: str, settings) -> None:
-    """Regenerate pass1 accepted artifacts (tent_mask.png + result.json) in-place."""
+    """Regenerate pass1 accepted result.json in-place."""
     from pbva_core import paths as p
     from pbva_core.types import Pass1RawResult
     from pbva_pipeline.base import NullProgress, PassPaths, PassContext
@@ -466,7 +466,7 @@ def submit_pass1_corrections(
     pass_row.latest_correction_id = art_id
     pass_row.updated_at = _utcnow()
 
-    # If pass1 is already accepted, regenerate tent_mask.png immediately so that
+    # If pass1 is already accepted, regenerate accepted result.json immediately so that
     # downstream passes receive up-to-date accepted artifacts without a manual re-accept.
     if pass_row.state == PassState.accepted.value:
         _rebuild_pass1_accepted(db, project_id, settings)
@@ -495,7 +495,7 @@ def accept_pass1(
     if not raw_path.exists():
         raise HTTPException(status_code=500, detail="Raw result.json not found")
 
-    # Regenerate accepted artifacts (tent_mask.png + result.json).
+    # Regenerate accepted result.json.
     _rebuild_pass1_accepted(db, project_id, settings)
 
     # Register accepted artifact.

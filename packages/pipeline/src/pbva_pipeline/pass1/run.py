@@ -8,14 +8,7 @@ from pathlib import Path
 import cv2  # type: ignore
 import numpy as np
 
-from pbva_core.dimensions import (
-    COURT_KV,
-    COURT_TOTAL_LENGTH,
-    COURT_TOTAL_WIDTH,
-    VOLUME_BOUNDARY_EXTENSION,
-    VOLUME_CORNER_HEIGHT,
-    VOLUME_NET_HEIGHT,
-)
+from pbva_core.dimensions import COURT_KV
 from pbva_core.types import (
     CourtCorner,
     CourtGeometry,
@@ -58,7 +51,7 @@ def _distort(xu: float, yu: float, cx: float, cy: float, k1: float, scale: float
     return cx + dx * f * scale, cy + dy * f * scale
 
 
-# ─── Tent mask ────────────────────────────────────────────────────────────────
+# ─── Homography ───────────────────────────────────────────────────────────────
 
 def _build_homography(g: CourtGeometry) -> np.ndarray:
     """Build the 3×3 homography mapping (u,v,1) → (px,py,w) from court corners."""
@@ -78,82 +71,6 @@ def _build_homography(g: CourtGeometry) -> np.ndarray:
         [TR.y * (gh + 1) - TL.y,  BL.y * (hh + 1) - TL.y,  TL.y],
         [gh,                       hh,                        1   ],
     ])
-
-
-def compute_tent_mask(court_geo: CourtGeometry, bg_w: int, bg_h: int) -> np.ndarray:
-    """Return a uint8 mask (bg_h × bg_w) with 255 inside the tent silhouette, 0 outside."""
-    half_w = COURT_TOTAL_WIDTH  / 2
-    half_l = COURT_TOTAL_LENGTH / 2
-    hw_ext = half_w + VOLUME_BOUNDARY_EXTENSION
-    hl_ext = half_l + VOLUME_BOUNDARY_EXTENSION
-    ch     = VOLUME_CORNER_HEIGHT
-    nh     = VOLUME_NET_HEIGHT
-
-    vertices = [
-        (-hw_ext, -hl_ext, 0 ),
-        ( hw_ext, -hl_ext, 0 ),
-        ( hw_ext,  hl_ext, 0 ),
-        (-hw_ext,  hl_ext, 0 ),
-        (-hw_ext, -hl_ext, ch),
-        ( hw_ext, -hl_ext, ch),
-        ( hw_ext,  hl_ext, ch),
-        (-hw_ext,  hl_ext, ch),
-        (-hw_ext,  0,      nh),
-        ( hw_ext,  0,      nh),
-    ]
-
-    H = _build_homography(court_geo)
-    M = np.array([
-        [1 / (2 * half_w), 0,               0.5],
-        [0,                1 / (2 * half_l), 0.5],
-        [0,                0,               1  ],
-    ])
-    Hphys = H @ M
-
-    cx, cy = bg_w / 2.0, bg_h / 2.0
-    Hc = np.array([
-        [Hphys[0, 0] - cx * Hphys[2, 0],  Hphys[0, 1] - cx * Hphys[2, 1],  Hphys[0, 2] - cx * Hphys[2, 2]],
-        [Hphys[1, 0] - cy * Hphys[2, 0],  Hphys[1, 1] - cy * Hphys[2, 1],  Hphys[1, 2] - cy * Hphys[2, 2]],
-        [Hphys[2, 0],                      Hphys[2, 1],                      Hphys[2, 2]                    ],
-    ])
-    h1, h2 = Hc[:, 0], Hc[:, 1]
-
-    num, denom = h1[0] * h2[0] + h1[1] * h2[1], h1[2] * h2[2]
-    if abs(denom) < 1e-12 or num / denom > 0:
-        f = np.sqrt(abs(num / denom) or 1) * (bg_w + bg_h) / 4
-    else:
-        f = np.sqrt(-num / denom)
-
-    K     = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
-    K_inv = np.array([[1/f, 0, -cx/f], [0, 1/f, -cy/f], [0, 0, 1]])
-
-    r1_raw = K_inv @ Hphys[:, 0]
-    r2_raw = K_inv @ Hphys[:, 1]
-    t_raw  = K_inv @ Hphys[:, 2]
-
-    lam = float(np.linalg.norm(r1_raw))
-    r1  = r1_raw / lam
-    r2  = r2_raw / lam
-    r3  = np.cross(r1, r2)
-    t   = t_raw  / lam
-
-    Rt = np.column_stack([r1, r2, r3, t])
-    P  = K @ Rt
-
-    projected = []
-    for X, Y, Z in vertices:
-        uvw = P @ np.array([X, Y, -Z, 1.0])
-        if uvw[2] > 0:
-            projected.append([uvw[0] / uvw[2], uvw[1] / uvw[2]])
-
-    if len(projected) < 3:
-        return np.full((bg_h, bg_w), 255, dtype=np.uint8)
-
-    pts  = np.array(projected, dtype=np.float32)
-    hull = cv2.convexHull(pts)
-    mask = np.zeros((bg_h, bg_w), dtype=np.uint8)
-    cv2.fillConvexPoly(mask, hull.astype(np.int32), 255)
-    return mask
 
 
 # ─── Bilinear interpolation ───────────────────────────────────────────────────
@@ -435,18 +352,8 @@ class Pass1:
         ctx: PassContext,
         raw_result: Pass1RawResult,
     ) -> Pass1AcceptedOutput:
-        pass0_accepted_path = ctx.paths.project_root / "passes" / "pass0" / "accepted" / "result.json"
-        if not pass0_accepted_path.exists():
-            raise FileNotFoundError("Pass 0 accepted output not found; accept Pass 0 before accepting Pass 1")
-        pass0 = Pass0AcceptedOutput.model_validate_json(pass0_accepted_path.read_text())
-
         accepted = Pass1AcceptedOutput(bg_width=raw_result.bg_width, bg_height=raw_result.bg_height)
-
         accepted_dir = ctx.paths.pass_accepted_dir
         accepted_dir.mkdir(parents=True, exist_ok=True)
         (accepted_dir / "result.json").write_text(accepted.model_dump_json(indent=2))
-
-        mask = compute_tent_mask(pass0.court_geometry, raw_result.bg_width, raw_result.bg_height)
-        cv2.imwrite(str(accepted_dir / "tent_mask.png"), mask)
-
         return accepted

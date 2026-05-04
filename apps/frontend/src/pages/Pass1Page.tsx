@@ -121,9 +121,10 @@ export default function Pass1Page() {
   )
 
   const { data: rawResult } = useQuery<Pass1RawResult>({
-    queryKey: ['pass1-raw', projectId],
+    queryKey: ['pass1-raw', projectId, rawJsonArtifact?.id],
     queryFn: async () => {
       const resp = await fetch(api.artifactUrl(rawJsonArtifact!.id))
+      if (!resp.ok) throw new Error(`Artifact fetch failed: ${resp.status}`)
       return resp.json()
     },
     enabled: !!rawJsonArtifact,
@@ -132,17 +133,17 @@ export default function Pass1Page() {
   // Resolve effective chunk position: null means use midpoint
   const chunkPos = useMemo(() => {
     if (selectedChunkPos !== null) return selectedChunkPos
-    if (!rawResult) return 0
+    if (!rawResult?.chunks?.length) return 0
     const midPos = rawResult.chunks.findIndex(c => c.chunk_index === rawResult.midpoint_chunk_index)
     return midPos >= 0 ? midPos : 0
   }, [selectedChunkPos, rawResult])
 
-  const selectedChunk = rawResult?.chunks[chunkPos]
+  const selectedChunk = rawResult?.chunks?.[chunkPos]
   const selectedChunkIndex = selectedChunk?.chunk_index ?? 0
 
   // Reconstruct court lines with samples for the selected chunk
   const displayCourtLines: Pass1CourtLine[] = useMemo(() => {
-    if (!rawResult || !selectedChunk) return []
+    if (!rawResult?.court_lines || !selectedChunk) return []
     const n = rawResult.perp_seg_points
     return rawResult.court_lines.map((line, li) => ({
       ...line,
@@ -157,7 +158,7 @@ export default function Pass1Page() {
   }, [rawResult, chunkPos])
 
   const refCourtLines: Pass1CourtLine[] = useMemo(() => {
-    if (!rawResult) return []
+    if (!rawResult?.chunks?.length || !rawResult.court_lines) return []
     const midPos = rawResult.chunks.findIndex(c => c.chunk_index === rawResult.midpoint_chunk_index)
     if (midPos < 0 || chunkPos === midPos) return []
     const refPos = chunkPos > midPos ? chunkPos - 1 : chunkPos + 1
@@ -178,10 +179,10 @@ export default function Pass1Page() {
 
   // Per-line gradient limits: max |gradient| across all chunks and all segment points.
   const lineGradLimits: number[] = useMemo(() => {
-    if (!rawResult) return []
+    if (!rawResult?.court_lines) return []
     return rawResult.court_lines.map((_, li) => {
       let max = 0
-      for (const chunk of rawResult.chunks) {
+      for (const chunk of rawResult.chunks ?? []) {
         const lineVals = chunk.vals[li]
         if (!lineVals) continue
         for (const ptVals of lineVals) {
@@ -243,7 +244,7 @@ export default function Pass1Page() {
               {totalSegments} segments · {rawResult.perp_seg_points} samples/seg
             </p>
           )}
-          {rawResult && rawResult.court_lines.map(l => (
+          {rawResult?.court_lines?.map(l => (
             <div key={l.name} style={{ fontSize: 11, color: l.color, marginBottom: 2 }}>
               ■ {l.name}
             </div>
@@ -284,7 +285,7 @@ export default function Pass1Page() {
               </div>
             )}
 
-            {rawResult && rawResult.chunks.length > 0 && (
+            {rawResult && (rawResult.chunks?.length ?? 0) > 0 && (
               <div style={{
                 position: 'absolute', bottom: 6, left: 6, right: 6,
                 display: 'flex', alignItems: 'center', gap: 6,
@@ -300,7 +301,7 @@ export default function Pass1Page() {
                 </button>
                 <input
                   type="range"
-                  min={0} max={rawResult.chunks.length - 1}
+                  min={0} max={(rawResult.chunks?.length ?? 1) - 1}
                   value={chunkPos}
                   onChange={e => setSelectedChunkPos(Number(e.target.value))}
                   style={{ flex: 1, minWidth: 0 }}

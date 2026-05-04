@@ -3,13 +3,116 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 
 import cv2
 import numpy as np
 
-from pbva_core.types import Pass1AcceptedOutput
+from pbva_core.dimensions import (
+    COURT_TOTAL_LENGTH,
+    COURT_TOTAL_WIDTH,
+    VOLUME_BOUNDARY_EXTENSION,
+    VOLUME_CORNER_HEIGHT,
+    VOLUME_NET_HEIGHT,
+)
+from pbva_core.types import CourtGeometry, Pass0AcceptedOutput, Pass1AcceptedOutput
 from pbva_pipeline.base import PassContext
+
+
+def _build_homography(g: CourtGeometry) -> np.ndarray:
+    TL, TR = g.top_left,    g.top_right
+    BL, BR = g.bottom_left, g.bottom_right
+
+    A = TR.x - BR.x;  B = BL.x - BR.x
+    C = TL.x - TR.x - BL.x + BR.x
+    D = TR.y - BR.y;  E = BL.y - BR.y
+    F = TL.y - TR.y - BL.y + BR.y
+    det = A * E - B * D
+    gh = (C * E - B * F) / det
+    hh = (A * F - C * D) / det
+
+    return np.array([
+        [TR.x * (gh + 1) - TL.x,  BL.x * (hh + 1) - TL.x,  TL.x],
+        [TR.y * (gh + 1) - TL.y,  BL.y * (hh + 1) - TL.y,  TL.y],
+        [gh,                       hh,                        1   ],
+    ])
+
+
+def _compute_tent_mask(court_geo: CourtGeometry, bg_w: int, bg_h: int) -> np.ndarray:
+    """Return a uint8 mask (bg_h × bg_w) with 255 inside the tent silhouette, 0 outside."""
+    half_w = COURT_TOTAL_WIDTH  / 2
+    half_l = COURT_TOTAL_LENGTH / 2
+    hw_ext = half_w + VOLUME_BOUNDARY_EXTENSION
+    hl_ext = half_l + VOLUME_BOUNDARY_EXTENSION
+    ch     = VOLUME_CORNER_HEIGHT
+    nh     = VOLUME_NET_HEIGHT
+
+    vertices = [
+        (-hw_ext, -hl_ext, 0 ),
+        ( hw_ext, -hl_ext, 0 ),
+        ( hw_ext,  hl_ext, 0 ),
+        (-hw_ext,  hl_ext, 0 ),
+        (-hw_ext, -hl_ext, ch),
+        ( hw_ext, -hl_ext, ch),
+        ( hw_ext,  hl_ext, ch),
+        (-hw_ext,  hl_ext, ch),
+        (-hw_ext,  0,      nh),
+        ( hw_ext,  0,      nh),
+    ]
+
+    H = _build_homography(court_geo)
+    M = np.array([
+        [1 / (2 * half_w), 0,               0.5],
+        [0,                1 / (2 * half_l), 0.5],
+        [0,                0,               1  ],
+    ])
+    Hphys = H @ M
+
+    cx, cy = bg_w / 2.0, bg_h / 2.0
+    Hc = np.array([
+        [Hphys[0, 0] - cx * Hphys[2, 0],  Hphys[0, 1] - cx * Hphys[2, 1],  Hphys[0, 2] - cx * Hphys[2, 2]],
+        [Hphys[1, 0] - cy * Hphys[2, 0],  Hphys[1, 1] - cy * Hphys[2, 1],  Hphys[1, 2] - cy * Hphys[2, 2]],
+        [Hphys[2, 0],                      Hphys[2, 1],                      Hphys[2, 2]                    ],
+    ])
+    h1, h2 = Hc[:, 0], Hc[:, 1]
+
+    num, denom = h1[0] * h2[0] + h1[1] * h2[1], h1[2] * h2[2]
+    if abs(denom) < 1e-12 or num / denom > 0:
+        f = math.sqrt(abs(num / denom) or 1) * (bg_w + bg_h) / 4
+    else:
+        f = math.sqrt(-num / denom)
+
+    K     = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+    K_inv = np.array([[1/f, 0, -cx/f], [0, 1/f, -cy/f], [0, 0, 1]])
+
+    r1_raw = K_inv @ Hphys[:, 0]
+    r2_raw = K_inv @ Hphys[:, 1]
+    t_raw  = K_inv @ Hphys[:, 2]
+
+    lam = float(np.linalg.norm(r1_raw))
+    r1  = r1_raw / lam
+    r2  = r2_raw / lam
+    r3  = np.cross(r1, r2)
+    t   = t_raw  / lam
+
+    Rt = np.column_stack([r1, r2, r3, t])
+    P  = K @ Rt
+
+    projected = []
+    for X, Y, Z in vertices:
+        uvw = P @ np.array([X, Y, -Z, 1.0])
+        if uvw[2] > 0:
+            projected.append([uvw[0] / uvw[2], uvw[1] / uvw[2]])
+
+    if len(projected) < 3:
+        return np.full((bg_h, bg_w), 255, dtype=np.uint8)
+
+    pts  = np.array(projected, dtype=np.float32)
+    hull = cv2.convexHull(pts)
+    mask = np.zeros((bg_h, bg_w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, hull.astype(np.int32), 255)
+    return mask
 
 # Must match Pass 3 histogram bin counts.
 _H_BINS, _S_BINS, _V_BINS = 48, 48, 8
@@ -34,11 +137,12 @@ class Pass4:
     def validate_inputs(self, ctx: PassContext) -> None:
         if not ctx.video_path.exists():
             raise FileNotFoundError(f"Video not found: {ctx.video_path}")
+        pass0_accepted = ctx.paths.project_root / "passes" / "pass0" / "accepted"
+        if not (pass0_accepted / "result.json").exists():
+            raise FileNotFoundError("Pass 0 accepted result.json not found")
         pass1_accepted = ctx.paths.project_root / "passes" / "pass1" / "accepted"
         if not (pass1_accepted / "result.json").exists():
             raise FileNotFoundError("Pass 1 accepted result.json not found")
-        if not (pass1_accepted / "tent_mask.png").exists():
-            raise FileNotFoundError("Pass 1 tent_mask.png not found")
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
         if not rally_path.exists():
             raise FileNotFoundError("Pass 2 accepted rally.json not found — record rallies in Pass 2 first")
@@ -51,17 +155,19 @@ class Pass4:
             from pbva_pipeline.base import NullProgress
             progress = NullProgress()
 
-        progress.update(0.02, "setup", "Loading pass 1 accepted output…")
+        progress.update(0.02, "setup", "Loading accepted outputs from pass 0 and pass 1…")
+        pass0_dir = ctx.paths.project_root / "passes" / "pass0"
+        pass0 = Pass0AcceptedOutput.model_validate_json(
+            (pass0_dir / "accepted" / "result.json").read_text()
+        )
         pass1_dir = ctx.paths.project_root / "passes" / "pass1"
         p1 = Pass1AcceptedOutput.model_validate_json(
             (pass1_dir / "accepted" / "result.json").read_text()
         )
-        in_time_s  = p1.stable_bounds.in_time_s
-        out_time_s = p1.stable_bounds.out_time_s
+        bg_w, bg_h = p1.bg_width, p1.bg_height
 
-        progress.update(0.04, "setup", "Loading tent mask…")
-        tent_mask = cv2.imread(str(pass1_dir / "accepted" / "tent_mask.png"), cv2.IMREAD_GRAYSCALE)
-        bg_h, bg_w = tent_mask.shape[:2]
+        progress.update(0.04, "setup", "Computing tent mask…")
+        tent_mask = _compute_tent_mask(pass0.court_geometry, bg_w, bg_h)
 
         progress.update(0.05, "setup", "Loading ball radius from pass 3, rally bounds from pass 2…")
         pass3_result_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "result.json"
@@ -97,10 +203,9 @@ class Pass4:
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video: {ctx.video_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or ctx.video_fps
-        in_frame  = max(0, int(in_time_s  * fps))
-        out_frame = int(out_time_s * fps)
         video_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        in_frame  = rally_intervals[0][0]  if rally_intervals else 0
+        out_frame = rally_intervals[-1][1] if rally_intervals else video_total_frames - 1
 
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -112,8 +217,8 @@ class Pass4:
         max_blob_radius = max_ball_radius + close_kernel.shape[0]
         half = 32   # patch half-size → 64×64 output
 
-        stable_frame_count = max(0, out_frame - in_frame + 1)
         total_rally_frames = sum(e - s + 1 for s, e in rally_intervals)
+        stable_frame_count = total_rally_frames
         in_rally_processed = 0
         detections: list[dict] = []
 
