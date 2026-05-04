@@ -176,7 +176,7 @@ def get_similarity(curves, min_overlap_frac=0.5, measure=True):
     return sim, lag, method
 
 
-def shift_curve(curve, lag, *, fill_value=np.nan):
+def shift_curve(curve, lag, *, fill_value=0.0):
     """
     Shift `curve` by the lag returned from zncc_best_lag(reference, curve).
 
@@ -242,7 +242,6 @@ def robust_reference_curve(
         raise ValueError("curves must have shape (nchunk, npts).")
 
     nchunk, npts = curves.shape
-    lags_by_index = scipy.signal.correlation_lags(npts, npts, mode="full")
 
     sim, _, method = get_similarity(curves, min_overlap_frac=min_overlap_frac, measure=True)
     sim_score = np.median(sim, axis=0)
@@ -303,17 +302,25 @@ def robust_reference_curve(
         lags[idx] = best_lag
         similarities[idx] = best_similarity
 
-    # Estimate lag of the central and reference chunks. Use interpolation in case the central chunk is not clean.
+    # Estimate lag of the central chunk. Use interpolation in case the central chunk is not clean.
     clean_idx = np.isfinite(lags)
     clean_chunks = np.arange(nchunk)[clean_idx]
     clean_lags = lags[clean_idx]
-    ref_lag = np.interp(ref_index, clean_chunks, clean_lags)
     lag0 = np.interp(nchunk // 2, clean_chunks, clean_lags)
 
     # Shift the reference curve by lag0 to align it with the central chunk.
-    reference = shift_curve(reference, ref_lag - lag0)
+    reference = shift_curve(reference, -lag0)
 
     # Shift all lags by lag0 to be relative to the central chunk.
     lags -= lag0
+
+    # Flip lag signs so that positive lag means the curve is shifted to the right relative to the reference, and negative lag means left.
+    lags *= -1
+
+    # Fill missing lags by linear interpolation, with constant extrapolation at the edges.
+    all_chunks = np.arange(nchunk, dtype=float)
+    finite = np.isfinite(lags)
+    if np.any(finite) and not np.all(finite):
+        lags[~finite] = np.interp(all_chunks[~finite], all_chunks[finite], lags[finite])
 
     return reference, lags, similarities

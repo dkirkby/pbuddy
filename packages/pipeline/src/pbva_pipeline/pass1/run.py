@@ -16,6 +16,7 @@ from pbva_core.types import (
     Pass0RawResult,
     Pass1AcceptedOutput,
     Pass1ChunkProfiles,
+    Pass1ChunkVertices,
     Pass1CourtLine,
     Pass1RawResult,
     Pass1SegmentAnalysis,
@@ -273,25 +274,35 @@ def track_court_outline(
 def _analyse_segments(
     court_lines: list[Pass1CourtLine],
     chunks: list[Pass1ChunkProfiles],
+    perp_seg_length_px: float,
     perp_seg_points: int,
+    on_segment: object = None,
 ) -> list[list[Pass1SegmentAnalysis]]:
-    """For each segment, compute a robust gradient reference curve and per-chunk lags."""
+    """For each segment, compute a robust gradient reference curve, per-chunk lags, and image positions."""
     import io
     import contextlib
     from pbva_pipeline.zncc import robust_reference_curve
 
     nchunks = len(chunks)
     blank_ref = [0.0] * perp_seg_points
+    pix_per_sample = 2.0 * perp_seg_length_px / (perp_seg_points - 1)
+    total_segments = sum(len(line.points) for line in court_lines)
+    segment_idx = 0
     result: list[list[Pass1SegmentAnalysis]] = []
 
     for li, line in enumerate(court_lines):
         line_analyses: list[Pass1SegmentAnalysis] = []
-        for pi in range(len(line.points)):
+        for pi, pt in enumerate(line.points):
+            if callable(on_segment):
+                on_segment(segment_idx, total_segments)
+            segment_idx += 1
+
             if nchunks < 2:
                 lags: list[float | None] = [None] * nchunks
                 sims: list[float | None] = [None] * nchunks
+                positions: list[list[float] | None] = [None] * nchunks
                 line_analyses.append(Pass1SegmentAnalysis(
-                    reference=blank_ref, lags=lags, similarities=sims,
+                    reference=blank_ref, lags=lags, similarities=sims, positions=positions,
                 ))
                 continue
 
@@ -309,10 +320,85 @@ def _analyse_segments(
                 lags = [None] * nchunks
                 sims = [None] * nchunks
 
-            line_analyses.append(Pass1SegmentAnalysis(reference=ref, lags=lags, similarities=sims))
+            perp_x = (pt.px1 - pt.sx) / perp_seg_length_px
+            perp_y = (pt.py1 - pt.sy) / perp_seg_length_px
+            positions = [
+                None if lag is None else [
+                    round(pt.sx + lag * pix_per_sample * perp_x, 2),
+                    round(pt.sy + lag * pix_per_sample * perp_y, 2),
+                ]
+                for lag in lags
+            ]
+
+            line_analyses.append(Pass1SegmentAnalysis(
+                reference=ref, lags=lags, similarities=sims, positions=positions,
+            ))
         result.append(line_analyses)
 
     return result
+
+
+# ─── Vertex computation ───────────────────────────────────────────────────────
+
+def _fit_line(points: np.ndarray) -> np.ndarray | None:
+    """Fit ax + by + c = 0 via total least squares (SVD). Returns unit-normalised (a,b,c) or None."""
+    if len(points) < 2:
+        return None
+    centroid = points.mean(axis=0)
+    _, _, Vt = np.linalg.svd(points - centroid, full_matrices=False)
+    a, b = Vt[-1]  # normal to the best-fit line
+    c = -(a * centroid[0] + b * centroid[1])
+    norm = math.sqrt(a * a + b * b)
+    return np.array([a / norm, b / norm, c / norm])
+
+
+def _intersect(l1: np.ndarray, l2: np.ndarray) -> list[float] | None:
+    """Intersection of two homogeneous lines (a,b,c). Returns [x, y] or None if parallel."""
+    cross = np.cross(l1, l2)
+    if abs(cross[2]) < 1e-9:
+        return None
+    return [round(float(cross[0] / cross[2]), 2), round(float(cross[1] / cross[2]), 2)]
+
+
+def _compute_chunk_vertices(
+    segment_analyses: list[list[Pass1SegmentAnalysis]],
+    court_lines: list[Pass1CourtLine],
+    chunks: list[Pass1ChunkProfiles],
+    cx: float, cy: float, k1: float, scale: float,
+) -> list[Pass1ChunkVertices]:
+    """For each chunk, undistort lag-derived positions, fit one line per court line,
+    then intersect adjacent pairs to obtain the 6 near-side court vertices."""
+    line_idx = {line.name: li for li, line in enumerate(court_lines)}
+
+    results: list[Pass1ChunkVertices] = []
+    for ci, chunk in enumerate(chunks):
+        fitted: dict[str, np.ndarray | None] = {}
+        for name, li in line_idx.items():
+            if li >= len(segment_analyses):
+                fitted[name] = None
+                continue
+            pts: list[list[float]] = []
+            for analysis in segment_analyses[li]:
+                pos = analysis.positions[ci] if ci < len(analysis.positions) else None
+                if pos is not None:
+                    xu, yu = _undistort(pos[0], pos[1], cx, cy, k1, scale)
+                    pts.append([xu, yu])
+            fitted[name] = _fit_line(np.array(pts)) if len(pts) >= 2 else None
+
+        def inter(n1: str, n2: str) -> list[float] | None:
+            l1, l2 = fitted.get(n1), fitted.get(n2)
+            return None if l1 is None or l2 is None else _intersect(l1, l2)
+
+        results.append(Pass1ChunkVertices(
+            chunk_index=chunk.chunk_index,
+            baseline_left=inter("near_baseline", "left_sideline"),
+            baseline_right=inter("near_baseline", "right_sideline"),
+            baseline_center=inter("near_baseline", "near_centerline"),
+            kitchen_left=inter("near_kitchen_line", "left_sideline"),
+            kitchen_right=inter("near_kitchen_line", "right_sideline"),
+            kitchen_center=inter("near_kitchen_line", "near_centerline"),
+        ))
+    return results
 
 
 # ─── Pass class ───────────────────────────────────────────────────────────────
@@ -345,14 +431,14 @@ class Pass1:
         medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
         median_index = pass0_raw.midpoint_chunk
 
-        progress.update(0.2, "track_outline", "Computing court-line geometry…")
+        progress.update(0.02, "track_outline", "Computing court-line geometry…")
         progress.check_cancelled()
 
         perp_seg_length_px: float = 64
         perp_seg_points: int = 128
 
         def _on_chunk(i: int, total: int) -> None:
-            progress.update(0.2 + 0.6 * i / total, "sampling", f"Sampling median {i + 1}/{total}…")
+            progress.update(0.02 + 0.13 * i / total, "sampling", f"Sampling median {i + 1}/{total}…")
             progress.check_cancelled()
 
         bg_w, bg_h, court_lines, chunks = track_court_outline(
@@ -365,11 +451,22 @@ class Pass1:
             on_chunk=_on_chunk,
         )
 
-        progress.update(0.8, "analyse", "Analysing court line segments…")
-        progress.check_cancelled()
-        segment_analyses = _analyse_segments(court_lines, chunks, perp_seg_points)
+        def _on_segment(i: int, total: int) -> None:
+            progress.update(0.15 + 0.82 * i / total, "analyse", f"Analysing segment {i + 1}/{total}…")
+            progress.check_cancelled()
 
-        progress.update(0.95, "write_outputs", "Writing raw outputs…")
+        segment_analyses = _analyse_segments(court_lines, chunks, perp_seg_length_px, perp_seg_points, on_segment=_on_segment)
+
+        progress.update(0.97, "vertices", "Computing court line vertices…")
+        progress.check_cancelled()
+        cx = bg_w / 2.0
+        cy = bg_h / 2.0
+        scale = math.sqrt(cx * cx + cy * cy)
+        chunk_vertices = _compute_chunk_vertices(
+            segment_analyses, court_lines, chunks, cx, cy, pass0_accepted.k1, scale,
+        )
+
+        progress.update(0.98, "write_outputs", "Writing raw outputs…")
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
         result = Pass1RawResult(
@@ -378,9 +475,11 @@ class Pass1:
             midpoint_chunk_index=median_index,
             perp_seg_length_px=perp_seg_length_px,
             perp_seg_points=perp_seg_points,
+            k1=pass0_accepted.k1,
             court_lines=court_lines,
             chunks=chunks,
             segment_analyses=segment_analyses,
+            chunk_vertices=chunk_vertices,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
 

@@ -1,8 +1,68 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
-import type { ArtifactRef, Pass1CourtLine, Pass1RawResult, Pass1Sample, Pass1SamplePoint, Pass1SegmentAnalysis } from '../types/api'
+import type { ArtifactRef, Pass1ChunkVertices, Pass1CourtLine, Pass1RawResult, Pass1Sample, Pass1SamplePoint, Pass1SegmentAnalysis } from '../types/api'
+
+// ─── Distortion helpers ───────────────────────────────────────────────────────
+
+function distort(xu: number, yu: number, cx: number, cy: number, k1: number, scale: number): [number, number] {
+  const dx = (xu - cx) / scale
+  const dy = (yu - cy) / scale
+  const r2 = dx * dx + dy * dy
+  if (Math.abs(k1) < 1e-9 || r2 < 1e-9) return [xu, yu]
+  const ru = Math.sqrt(r2)
+  const disc = 1 - 4 * k1 * r2
+  if (disc < 0) return [xu, yu]
+  const rd = (1 - Math.sqrt(disc)) / (2 * k1 * ru)
+  const f = rd / ru
+  return [cx + dx * f * scale, cy + dy * f * scale]
+}
+
+function distortedEdgePts(
+  p1: [number, number], p2: [number, number],
+  cx: number, cy: number, k1: number, scale: number,
+  n = 24,
+): string {
+  const pts: string[] = []
+  for (let i = 0; i <= n; i++) {
+    const t = i / n
+    const [xd, yd] = distort(p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]), cx, cy, k1, scale)
+    pts.push(`${xd.toFixed(1)},${yd.toFixed(1)}`)
+  }
+  return pts.join(' ')
+}
+
+// ─── Vertex overlay ───────────────────────────────────────────────────────────
+
+const VERTEX_EDGES: { p1: keyof Pass1ChunkVertices; p2: keyof Pass1ChunkVertices; color: string }[] = [
+  { p1: 'baseline_left',   p2: 'baseline_right',  color: '#0ff' },
+  { p1: 'kitchen_left',    p2: 'kitchen_right',    color: '#f80' },
+  { p1: 'baseline_left',   p2: 'kitchen_left',     color: '#f0f' },
+  { p1: 'baseline_right',  p2: 'kitchen_right',    color: '#ff0' },
+  { p1: 'baseline_center', p2: 'kitchen_center',   color: '#0f0' },
+]
+
+function VertexOverlay({ vertices, cx, cy, k1, scale }: {
+  vertices: Pass1ChunkVertices
+  cx: number; cy: number; k1: number; scale: number
+}): ReactNode {
+  return (
+    <g opacity={0.75}>
+      {VERTEX_EDGES.map(({ p1, p2, color }) => {
+        const a = vertices[p1] as [number, number] | null | undefined
+        const b = vertices[p2] as [number, number] | null | undefined
+        if (!a || !b) return null
+        return (
+          <polyline key={`${p1}-${p2}`}
+            points={distortedEdgePts(a, b, cx, cy, k1, scale)}
+            fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round"
+          />
+        )
+      })}
+    </g>
+  )
+}
 
 // ─── Subplot ──────────────────────────────────────────────────────────────────
 
@@ -225,6 +285,10 @@ export default function Pass1Page() {
   const imgUrl = rawPngArtifact ? api.artifactUrl(rawPngArtifact.id) : null
   const bgW = rawResult?.bg_width ?? 1
   const bgH = rawResult?.bg_height ?? 1
+  const cx = bgW / 2, cy = bgH / 2
+  const camScale = Math.sqrt(cx * cx + cy * cy)
+  const k1 = rawResult?.k1 ?? 0
+  const chunkVertices = rawResult?.chunk_vertices?.[chunkPos]
   const totalSegments = (rawResult?.court_lines ?? []).reduce((n, l) => n + l.points.length, 0)
 
   return (
@@ -323,19 +387,26 @@ export default function Pass1Page() {
                   overflow: 'visible', pointerEvents: 'none',
                 }}
               >
-                {displayCourtLines.map(line =>
-                  line.points.map((pt, i) => {
+                {chunkVertices && (
+                  <VertexOverlay vertices={chunkVertices} cx={cx} cy={cy} k1={k1} scale={camScale} />
+                )}
+                {displayCourtLines.map((line, li) =>
+                  line.points.map((pt, pi) => {
                     const dx = pt.px1 - pt.px2
                     const dy = pt.py1 - pt.py2
                     const len = Math.sqrt(dx * dx + dy * dy) || 1
                     const ux = dx / len, uy = dy / len
+                    // tangent direction (parallel to court line)
+                    const tx = -uy, ty = ux
                     const AL = 14, AW = 7  // arrowhead length and half-width in image px
                     const bx = pt.px1 - AL * ux, by = pt.py1 - AL * uy
                     const arrowPts = `${pt.px1},${pt.py1} ${bx - AW * uy},${by + AW * ux} ${bx + AW * uy},${by - AW * ux}`
-                    const label = String.fromCharCode(65 + i)
+                    const label = String.fromCharCode(65 + pi)
                     const lx = pt.px2 - 12 * ux, ly = pt.py2 - 12 * uy
+                    const pos = rawResult?.segment_analyses?.[li]?.[pi]?.positions?.[chunkPos]
+                    const HL = 10  // half-length of lag marker line in image px
                     return (
-                      <g key={`${line.name}-${i}`} opacity={0.9}>
+                      <g key={`${line.name}-${pi}`} opacity={0.9}>
                         <line x1={pt.px1} y1={pt.py1} x2={pt.px2} y2={pt.py2}
                           stroke={line.color} strokeWidth={2} fill="none" />
                         <polygon points={arrowPts} fill={line.color} stroke="none" />
@@ -345,6 +416,14 @@ export default function Pass1Page() {
                           fill={line.color}>
                           {label}
                         </text>
+                        {pos && (
+                          <line
+                            x1={pos[0] - HL * tx} y1={pos[1] - HL * ty}
+                            x2={pos[0] + HL * tx} y2={pos[1] + HL * ty}
+                            stroke={line.color} strokeWidth={2.5}
+                            strokeLinecap="round"
+                          />
+                        )}
                       </g>
                     )
                   })

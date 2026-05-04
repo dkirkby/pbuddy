@@ -97,9 +97,20 @@ export interface Pass1ChunkProfiles {
 }
 
 export interface Pass1SegmentAnalysis {
-  reference: number[]              // gradient reference curve, length = perp_seg_points
-  lags: (number | null)[]         // per-chunk lag in sample units (null = not clean)
-  similarities: (number | null)[] // per-chunk ZNCC similarity
+  reference: number[]                       // gradient reference curve, length = perp_seg_points
+  lags: (number | null)[]                  // per-chunk lag in sample units (null = not clean)
+  similarities: (number | null)[]          // per-chunk ZNCC similarity
+  positions?: ([number, number] | null)[]  // per-chunk [x, y] image coord of the court line
+}
+
+export interface Pass1ChunkVertices {
+  chunk_index: number
+  baseline_left?: [number, number] | null
+  baseline_right?: [number, number] | null
+  baseline_center?: [number, number] | null
+  kitchen_left?: [number, number] | null
+  kitchen_right?: [number, number] | null
+  kitchen_center?: [number, number] | null
 }
 
 export interface Pass1RawResult {
@@ -108,9 +119,11 @@ export interface Pass1RawResult {
   midpoint_chunk_index: number
   perp_seg_length_px: number
   perp_seg_points: number
+  k1: number
   court_lines: Pass1CourtLine[]    // geometry only, chunk-independent
   chunks: Pass1ChunkProfiles[]     // per-chunk sampled values
   segment_analyses?: Pass1SegmentAnalysis[][]  // [line_idx][point_idx]
+  chunk_vertices?: Pass1ChunkVertices[]        // per-chunk undistorted court vertices
 }
 
 export interface Pass1CorrectionPayload {
