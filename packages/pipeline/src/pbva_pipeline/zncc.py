@@ -177,84 +177,141 @@ def get_similarity(curves, min_overlap_frac=0.5, measure=True):
 
 
 def shift_curve(curve, lag, *, fill_value=np.nan):
-    """Shift `curve` by `lag` samples using linear interpolation."""
+    """
+    Shift `curve` by the lag returned from zncc_best_lag(reference, curve).
+
+    If lag = -3, the feature in `curve` is 3 pixels to the right of the
+    reference feature, so we sample curve[i - lag] = curve[i + 3] to align it.
+
+    Returns a curve on the original sample grid.
+    """
     curve = np.asarray(curve, dtype=float)
-    i = np.arange(curve.size, dtype=float)
-    return np.interp(i - lag, i, curve, left=fill_value, right=fill_value)
+    npts = curve.size
+
+    i = np.arange(npts, dtype=float)
+
+    return np.interp(
+        i - lag,
+        i,
+        curve,
+        left=fill_value,
+        right=fill_value,
+    )
 
 
-def robust_reference_curve(curves, clean_frac=0.9, min_overlap_frac=0.5, n_iter=3):
+def robust_reference_curve(
+    curves,
+    clean_frac=0.9,
+    min_overlap_frac=0.5,
+    n_iter=3
+):
     """
     Build a robust reference curve from clean, shift-equivalent 1D curves.
 
     Parameters
     ----------
     curves : ndarray, shape (nchunk, npts)
+        Input sampled profiles.
+
     clean_frac : float
-        Fraction of curves (by median pairwise similarity) used for alignment.
+        Fraction of curves with the highest median pairwise similarity that are considered
+        "clean" and used for alignment. Must be in (0, 1].
+
     min_overlap_frac : float
+        Minimum required overlap fraction for curve alignment.
+
     n_iter : int
         Number of align-average iterations.
 
     Returns
     -------
     reference : ndarray, shape (npts,)
+        Robust reference curve on the original sample grid.
+
     lags : ndarray, shape (nchunk,)
-        Lag of each curve relative to the reference (NaN for non-clean curves).
+        Estimated lag of each curve relative to the final reference.
+        Non-clean curves are NaN.
+
     similarities : ndarray, shape (nchunk,)
-        ZNCC similarity to reference (NaN for non-clean curves).
+        ZNCC similarity of each curve to the final reference.
+        Non-clean curves are NaN.
     """
     curves = np.asarray(curves, dtype=float)
+
     if curves.ndim != 2:
         raise ValueError("curves must have shape (nchunk, npts).")
 
     nchunk, npts = curves.shape
+    lags_by_index = scipy.signal.correlation_lags(npts, npts, mode="full")
 
     sim, _, method = get_similarity(curves, min_overlap_frac=min_overlap_frac, measure=True)
     sim_score = np.median(sim, axis=0)
     clean = sim_score >= np.quantile(sim_score, 1 - clean_frac)
     clean_indices = np.flatnonzero(clean)
 
-    ref_index = clean_indices[np.argmax(sim_score[clean_indices])]
+    # Choose initial reference as the clean curve with the highest median similarity to other curves.
+    ref_index = np.argmax(sim_score[clean_indices])
     reference = curves[ref_index].astype(float).copy()
 
+    # Iteratively align clean curves to the current reference and robust-average.
     for _ in range(n_iter):
         aligned_list = []
+
         for idx in clean_indices:
-            best_lag, _ = zncc_best_lag(
-                reference, curves[idx],
+            best_lag, best_similarity = zncc_best_lag(
+                reference,
+                curves[idx],
                 min_overlap_frac=min_overlap_frac,
                 method=method,
             )
+
             aligned_list.append(shift_curve(curves[idx], best_lag))
+
         aligned = np.vstack(aligned_list)
+
+        # Robust aggregate. Median is usually safer than mean when a few
+        # "clean" curves are still mildly contaminated.
         reference = np.nanmedian(aligned, axis=0)
+
+        # Fill edge NaNs, if any, by nearest finite values.
         finite = np.isfinite(reference)
         if not np.all(finite):
             good_x = np.flatnonzero(finite)
             if good_x.size == 0:
                 raise RuntimeError("Reference became all-NaN during alignment.")
+
+            bad_x = np.flatnonzero(~finite)
             reference[~finite] = np.interp(
-                np.flatnonzero(~finite), good_x, reference[finite]
+                bad_x,
+                good_x,
+                reference[finite],
             )
 
+    # Final lags and similarities relative to the final reference.
     lags = np.full(nchunk, np.nan)
     similarities = np.full(nchunk, np.nan)
+
     for idx in clean_indices:
-        best_lag, best_sim = zncc_best_lag(
-            reference, curves[idx],
+        best_lag, best_similarity = zncc_best_lag(
+            reference,
+            curves[idx],
             min_overlap_frac=min_overlap_frac,
             method=method,
             subpixel=True,
         )
-        lags[idx] = best_lag
-        similarities[idx] = best_sim
 
-    # Estimate lag of the central chunk. Use interpolation in case the central chunk is not clean.
-    lag0 = np.interp(nchunk // 2, np.arange(nchunk), lags)
+        lags[idx] = best_lag
+        similarities[idx] = best_similarity
+
+    # Estimate lag of the central and reference chunks. Use interpolation in case the central chunk is not clean.
+    clean_idx = np.isfinite(lags)
+    clean_chunks = np.arange(nchunk)[clean_idx]
+    clean_lags = lags[clean_idx]
+    ref_lag = np.interp(ref_index, clean_chunks, clean_lags)
+    lag0 = np.interp(nchunk // 2, clean_chunks, clean_lags)
 
     # Shift the reference curve by lag0 to align it with the central chunk.
-    reference = shift_curve(reference, lag0)
+    reference = shift_curve(reference, ref_lag - lag0)
 
     # Shift all lags by lag0 to be relative to the central chunk.
     lags -= lag0
