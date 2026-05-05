@@ -101,6 +101,8 @@ export interface Pass1SegmentAnalysis {
   lags: (number | null)[]                  // per-chunk lag in sample units (null = not clean)
   similarities: (number | null)[]          // per-chunk ZNCC similarity
   positions?: ([number, number] | null)[]  // per-chunk [x, y] image coord of the court line
+  is_interpolated?: boolean[]              // per-chunk: lag was NaN, filled by interpolation
+  is_outlier?: boolean[]                   // per-chunk: position was a line-fit outlier
 }
 
 export interface Pass1ChunkVertices {
@@ -124,6 +126,14 @@ export interface Pass1RawResult {
   chunks: Pass1ChunkProfiles[]     // per-chunk sampled values
   segment_analyses?: Pass1SegmentAnalysis[][]  // [line_idx][point_idx]
   chunk_vertices?: Pass1ChunkVertices[]        // per-chunk undistorted court vertices
+}
+
+export interface Pass1CameraModelEntry {
+  chunk_id: number
+  midpt_frame: number
+  midpt_time_sec: number
+  // Distorted image coords in order: near-left, near-right, far-right, far-left (CCW from above).
+  img_corners_px: { x: number; y: number }[] | null
 }
 
 export interface Pass1CorrectionPayload {

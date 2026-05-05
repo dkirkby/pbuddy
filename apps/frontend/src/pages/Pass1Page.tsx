@@ -2,9 +2,20 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
-import type { ArtifactRef, Pass1ChunkVertices, Pass1CourtLine, Pass1RawResult, Pass1Sample, Pass1SamplePoint, Pass1SegmentAnalysis } from '../types/api'
+import type { ArtifactRef, Pass1CameraModelEntry, Pass1ChunkVertices, Pass1CourtLine, Pass1RawResult, Pass1Sample, Pass1SamplePoint, Pass1SegmentAnalysis } from '../types/api'
 
 // ─── Distortion helpers ───────────────────────────────────────────────────────
+
+function undistort(xd: number, yd: number, cx: number, cy: number, k1: number, scale: number): [number, number] {
+  const dx = (xd - cx) / scale
+  const dy = (yd - cy) / scale
+  const r2 = dx * dx + dy * dy
+  if (Math.abs(k1) < 1e-9 || r2 < 1e-9) return [xd, yd]
+  const rd = Math.sqrt(r2)
+  const ru = rd / (1 + k1 * r2)
+  const f = ru / rd
+  return [cx + dx * f * scale, cy + dy * f * scale]
+}
 
 function distort(xu: number, yu: number, cx: number, cy: number, k1: number, scale: number): [number, number] {
   const dx = (xu - cx) / scale
@@ -64,6 +75,36 @@ function VertexOverlay({ vertices, cx, cy, k1, scale }: {
   )
 }
 
+// Dashed far-side court edges extrapolated from the camera model.
+// kitchen_left/right are undistorted; camera corners are distorted and undistorted here.
+function CourtOutlineOverlay({ kitchenLeft, kitchenRight, corners, cx, cy, k1, scale }: {
+  kitchenLeft: [number, number] | null | undefined
+  kitchenRight: [number, number] | null | undefined
+  corners: { x: number; y: number }[]   // [near-left, near-right, far-right, far-left] distorted
+  cx: number; cy: number; k1: number; scale: number
+}): ReactNode {
+  if (corners.length < 4) return null
+  const farRight = undistort(corners[2].x, corners[2].y, cx, cy, k1, scale)
+  const farLeft  = undistort(corners[3].x, corners[3].y, cx, cy, k1, scale)
+
+  const edges: { p1: [number, number]; p2: [number, number]; color: string }[] = [
+    { p1: farLeft, p2: farRight, color: '#0ff' },  // far baseline
+  ]
+  if (kitchenLeft)  edges.push({ p1: kitchenLeft  as [number, number], p2: farLeft,  color: '#f0f' })
+  if (kitchenRight) edges.push({ p1: kitchenRight as [number, number], p2: farRight, color: '#ff0' })
+
+  return (
+    <g opacity={0.6} strokeDasharray="6,4">
+      {edges.map(({ p1, p2, color }, i) => (
+        <polyline key={i}
+          points={distortedEdgePts(p1, p2, cx, cy, k1, scale)}
+          fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round"
+        />
+      ))}
+    </g>
+  )
+}
+
 // ─── Subplot ──────────────────────────────────────────────────────────────────
 
 const PLOT_W = 100
@@ -96,10 +137,12 @@ function npGradient(samples: Pass1Sample[]): Pass1Sample[] {
   }))
 }
 
-function SegmentPlot({ pt, index, color, referenceCurve, lagPx, gradLimit }: {
+function SegmentPlot({ pt, index, color, referenceCurve, lagPx, isInterpolated, isOutlier, gradLimit }: {
   pt: Pass1SamplePoint; index: number; color: string
-  referenceCurve?: number[]   // pre-computed gradient reference (one value per sample)
-  lagPx?: number | null       // lag in pixels for the current chunk
+  referenceCurve?: number[]
+  lagPx?: number | null
+  isInterpolated?: boolean
+  isOutlier?: boolean
   gradLimit: number
 }) {
   if (!pt.samples?.length) return null
@@ -118,19 +161,28 @@ function SegmentPlot({ pt, index, color, referenceCurve, lagPx, gradLimit }: {
     : null
   const lagLabel = lagPx != null ? `${lagPx > 0 ? '+' : ''}${lagPx.toFixed(1)}` : null
 
+  const bgFill = isOutlier ? '#1a0000' : '#111'
+
   return (
     <svg viewBox={`0 0 ${PLOT_W} ${PLOT_H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
       <g transform={`translate(${PAD.left},${PAD.top})`}>
-        <rect x={0} y={0} width={INNER_W} height={INNER_H} fill="#111" stroke="#444" strokeWidth={0.5} />
+        <rect x={0} y={0} width={INNER_W} height={INNER_H} fill={bgFill} stroke="#444" strokeWidth={0.5} />
         <line x1={0} y1={yZero} x2={INNER_W} y2={yZero} stroke="#555" strokeWidth={0.5} strokeDasharray="2,2" />
         <line x1={xMid} y1={0} x2={xMid} y2={INNER_H} stroke="#555" strokeWidth={0.5} strokeDasharray="2,2" />
         {refGrad && (
           <polyline points={pts(refGrad)} fill="none" stroke={color} strokeWidth={0.5} strokeOpacity={0.5} strokeDasharray="2,2" />
         )}
-        <polyline points={pts(grad)} fill="none" stroke={color} strokeWidth={0.75} />
+        <polyline points={pts(grad)} fill="none" stroke={color} strokeWidth={0.75}
+          strokeOpacity={isInterpolated ? 0.45 : 1} />
         <text x={2} y={INNER_H - 2} fontSize={7} fill={color} opacity={0.75}>{label}</text>
         {lagLabel && (
           <text x={INNER_W - 1} y={INNER_H - 2} fontSize={6} fill={color} opacity={0.9} textAnchor="end">{lagLabel}px</text>
+        )}
+        {isInterpolated && (
+          <text x={2} y={7} fontSize={6} fill="#aaa" opacity={0.8}>~</text>
+        )}
+        {isOutlier && (
+          <text x={INNER_W - 1} y={7} fontSize={6} fill="#f66" textAnchor="end">!</text>
         )}
       </g>
     </svg>
@@ -163,10 +215,14 @@ function CourtLineGrid({ line, lineAnalyses, chunkPos, pixPerSample, gradLimit }
             const analysis = lineAnalyses?.[absIdx]
             const lagSamples = analysis?.lags?.[chunkPos] ?? null
             const lagPx = lagSamples != null ? lagSamples * pixPerSample : null
+            const isInterpolated = analysis?.is_interpolated?.[chunkPos] ?? false
+            const isOutlier = analysis?.is_outlier?.[chunkPos] ?? false
             return (
               <SegmentPlot key={i} pt={pt} index={absIdx} color={line.color}
                 referenceCurve={analysis?.reference}
                 lagPx={lagPx}
+                isInterpolated={isInterpolated}
+                isOutlier={isOutlier}
                 gradLimit={gradLimit} />
             )
           })}
@@ -262,6 +318,24 @@ export default function Pass1Page() {
     enabled: !!rawResult,
   })
   const pass0Artifacts: ArtifactRef[] = pass0ArtResp?.data ?? []
+
+  const cameraModelArtifact = artifacts.find(
+    (a) => a.artifact_role === 'raw' && a.path.endsWith('camera-model.json')
+  )
+  const { data: cameraModel } = useQuery<Pass1CameraModelEntry[]>({
+    queryKey: ['pass1-camera-model', projectId, cameraModelArtifact?.id],
+    queryFn: async () => {
+      const resp = await fetch(api.artifactUrl(cameraModelArtifact!.id))
+      if (!resp.ok) throw new Error(`Artifact fetch failed: ${resp.status}`)
+      return resp.json()
+    },
+    enabled: !!cameraModelArtifact,
+  })
+
+  const cameraEntry = useMemo(
+    () => cameraModel?.find(e => e.chunk_id === selectedChunkIndex) ?? null,
+    [cameraModel, selectedChunkIndex],
+  )
 
   const medianTag = `median_${String(selectedChunkIndex).padStart(3, '0')}`
   const rawPngArtifact = rawResult
@@ -387,6 +461,14 @@ export default function Pass1Page() {
                   overflow: 'visible', pointerEvents: 'none',
                 }}
               >
+                {chunkVertices && cameraEntry?.img_corners_px && (
+                  <CourtOutlineOverlay
+                    kitchenLeft={chunkVertices.kitchen_left as [number, number] | null}
+                    kitchenRight={chunkVertices.kitchen_right as [number, number] | null}
+                    corners={cameraEntry.img_corners_px}
+                    cx={cx} cy={cy} k1={k1} scale={camScale}
+                  />
+                )}
                 {chunkVertices && (
                   <VertexOverlay vertices={chunkVertices} cx={cx} cy={cy} k1={k1} scale={camScale} />
                 )}

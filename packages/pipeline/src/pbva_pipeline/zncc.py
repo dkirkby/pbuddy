@@ -1,6 +1,7 @@
 """Zero-mean normalised cross-correlation utilities for 1D curve alignment."""
 
 import numpy as np
+import scipy.interpolate
 import scipy.signal
 
 
@@ -317,10 +318,15 @@ def robust_reference_curve(
     # Flip lag signs so that positive lag means the curve is shifted to the right relative to the reference, and negative lag means left.
     lags *= -1
 
-    # Fill missing lags by linear interpolation, with constant extrapolation at the edges.
-    all_chunks = np.arange(nchunk, dtype=float)
-    finite = np.isfinite(lags)
-    if np.any(finite) and not np.all(finite):
-        lags[~finite] = np.interp(all_chunks[~finite], all_chunks[finite], lags[finite])
+    # Record which lags were NaN (not clean) before filling.
+    was_nan = ~np.isfinite(lags)
 
-    return reference, lags, similarities
+    # Fill missing lags by linear interpolation/extrapolation.
+    all_chunks = np.arange(nchunk, dtype=float)
+    if np.any(was_nan) and not np.all(was_nan):
+        f = scipy.interpolate.interp1d(
+            all_chunks[~was_nan], lags[~was_nan], kind="linear", fill_value="extrapolate"
+        )
+        lags[was_nan] = f(all_chunks[was_nan])
+
+    return reference, lags, similarities, was_nan

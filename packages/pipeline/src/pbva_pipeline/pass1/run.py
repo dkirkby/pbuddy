@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
 import cv2  # type: ignore
 import numpy as np
 
-from pbva_core.dimensions import COURT_KV
+from pbva_core.dimensions import COURT_KV, COURT_TOTAL_LENGTH, COURT_TOTAL_WIDTH
 from pbva_core.types import (
     CourtCorner,
     CourtGeometry,
@@ -303,6 +304,7 @@ def _analyse_segments(
                 positions: list[list[float] | None] = [None] * nchunks
                 line_analyses.append(Pass1SegmentAnalysis(
                     reference=blank_ref, lags=lags, similarities=sims, positions=positions,
+                    is_interpolated=[False] * nchunks, is_outlier=[False] * nchunks,
                 ))
                 continue
 
@@ -311,14 +313,16 @@ def _analyse_segments(
 
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
-                    reference, lags_arr, sims_arr = robust_reference_curve(grad_curves)
+                    reference, lags_arr, sims_arr, was_nan = robust_reference_curve(grad_curves)
                 ref = [round(float(v), 4) for v in reference]
                 lags = [None if np.isnan(v) else round(float(v), 4) for v in lags_arr]
                 sims = [None if np.isnan(v) else round(float(v), 4) for v in sims_arr]
+                is_interp = [bool(w) for w in was_nan]
             except Exception:
                 ref = blank_ref
                 lags = [None] * nchunks
                 sims = [None] * nchunks
+                is_interp = [False] * nchunks
 
             perp_x = (pt.px1 - pt.sx) / perp_seg_length_px
             perp_y = (pt.py1 - pt.sy) / perp_seg_length_px
@@ -332,6 +336,7 @@ def _analyse_segments(
 
             line_analyses.append(Pass1SegmentAnalysis(
                 reference=ref, lags=lags, similarities=sims, positions=positions,
+                is_interpolated=is_interp, is_outlier=[False] * nchunks,
             ))
         result.append(line_analyses)
 
@@ -360,14 +365,22 @@ def _intersect(l1: np.ndarray, l2: np.ndarray) -> list[float] | None:
     return [round(float(cross[0] / cross[2]), 2), round(float(cross[1] / cross[2]), 2)]
 
 
+_OUTLIER_FACTOR = 2.0   # max residual must exceed this multiple of others' RMS
+_OUTLIER_MIN_PX = 3.0   # and must exceed this absolute threshold (undistorted px)
+
+
 def _compute_chunk_vertices(
     segment_analyses: list[list[Pass1SegmentAnalysis]],
     court_lines: list[Pass1CourtLine],
     chunks: list[Pass1ChunkProfiles],
     cx: float, cy: float, k1: float, scale: float,
 ) -> list[Pass1ChunkVertices]:
-    """For each chunk, undistort lag-derived positions, fit one line per court line,
-    then intersect adjacent pairs to obtain the 6 near-side court vertices."""
+    """For each chunk, undistort lag-derived positions, fit one line per court line
+    (with outlier detection and refit when ≥3 points), then intersect adjacent pairs
+    to obtain the 6 near-side court vertices.
+
+    Outlier flags are written back into segment_analyses in place.
+    """
     line_idx = {line.name: li for li, line in enumerate(court_lines)}
 
     results: list[Pass1ChunkVertices] = []
@@ -377,13 +390,38 @@ def _compute_chunk_vertices(
             if li >= len(segment_analyses):
                 fitted[name] = None
                 continue
-            pts: list[list[float]] = []
-            for analysis in segment_analyses[li]:
+
+            # Collect (xu, yu, pi) for each segment with a valid position.
+            pts: list[tuple[float, float, int]] = []
+            for pi, analysis in enumerate(segment_analyses[li]):
                 pos = analysis.positions[ci] if ci < len(analysis.positions) else None
                 if pos is not None:
                     xu, yu = _undistort(pos[0], pos[1], cx, cy, k1, scale)
-                    pts.append([xu, yu])
-            fitted[name] = _fit_line(np.array(pts)) if len(pts) >= 2 else None
+                    pts.append((xu, yu, pi))
+
+            if len(pts) < 2:
+                fitted[name] = None
+                continue
+
+            arr = np.array([[x, y] for x, y, _ in pts])
+
+            if len(pts) >= 3:
+                # Leave-one-out residuals: fit through n-1 points, measure left-out point's distance.
+                loo_res = np.zeros(len(pts))
+                for i in range(len(pts)):
+                    loo_line = _fit_line(np.delete(arr, i, axis=0))
+                    if loo_line is not None:
+                        loo_res[i] = abs(float(arr[i] @ loo_line[:2] + loo_line[2]))
+
+                max_idx = int(np.argmax(loo_res))
+                max_res = float(loo_res[max_idx])
+                others_rms = float(np.sqrt(np.mean(np.delete(loo_res, max_idx) ** 2)))
+
+                if max_res > _OUTLIER_FACTOR * others_rms and max_res > _OUTLIER_MIN_PX:
+                    segment_analyses[li][pts[max_idx][2]].is_outlier[ci] = True
+                    arr = np.delete(arr, max_idx, axis=0)
+
+            fitted[name] = _fit_line(arr)
 
         def inter(n1: str, n2: str) -> list[float] | None:
             l1, l2 = fitted.get(n1), fitted.get(n2)
@@ -399,6 +437,106 @@ def _compute_chunk_vertices(
             kitchen_center=inter("near_kitchen_line", "near_centerline"),
         ))
     return results
+
+
+# ─── Camera model (far-corner extrapolation) ──────────────────────────────────
+
+# Physical coordinates of each named near-side vertex (x=left→right, y=near→far, metres).
+_W = COURT_TOTAL_WIDTH
+_L = COURT_TOTAL_LENGTH
+_D = COURT_KV * _L   # near-baseline to near-kitchen distance
+
+_VERTEX_PHYS: dict[str, tuple[float, float]] = {
+    "baseline_left":   (0.0,    0.0),
+    "baseline_right":  (_W,     0.0),
+    "baseline_center": (_W / 2, 0.0),
+    "kitchen_left":    (0.0,    _D),
+    "kitchen_right":   (_W,     _D),
+    "kitchen_center":  (_W / 2, _D),
+}
+
+
+def _dlt_homography(phys: np.ndarray, img: np.ndarray) -> np.ndarray | None:
+    """Fit 3×3 homography H so that H @ [x,y,1]^T ∝ [u,v,1]^T (undistorted image).
+
+    phys, img : (n, 2) arrays of corresponding physical / undistorted-image coords.
+    Returns H or None if the system is degenerate.
+    """
+    n = len(phys)
+    if n < 4:
+        return None
+    A = np.zeros((2 * n, 9))
+    for i, ((x, y), (u, v)) in enumerate(zip(phys, img)):
+        A[2 * i]     = [x, y, 1,  0, 0, 0,  -u * x, -u * y, -u]
+        A[2 * i + 1] = [0, 0, 0,  x, y, 1,  -v * x, -v * y, -v]
+    _, _, Vt = np.linalg.svd(A)
+    h = Vt[-1]
+    if abs(h[8]) < 1e-12:
+        return None
+    return h.reshape(3, 3)
+
+
+def _project(H: np.ndarray, x: float, y: float) -> tuple[float, float]:
+    """Map physical (x,y) → undistorted image (u,v) via homography H."""
+    w = H @ np.array([x, y, 1.0])
+    return float(w[0] / w[2]), float(w[1] / w[2])
+
+
+def _compute_camera_model(
+    chunk_vertices: list[Pass1ChunkVertices],
+    cx: float, cy: float, k1: float, scale: float,
+    video_fps: float,
+    video_duration_s: float,
+    median_count: int,
+) -> list[dict]:
+    """For each chunk, fit a physical→undistorted homography from the near-side vertices,
+    project the 4 full-court corners, and distort to image pixel coordinates.
+
+    Corners are returned in order: near-left, near-right, far-right, far-left (CCW from above).
+    """
+    total_frames = video_fps * video_duration_s
+    entries: list[dict] = []
+
+    for cv in chunk_vertices:
+        chunk_id = cv.chunk_index
+        midpt_frame = int((chunk_id + 0.5) * total_frames / median_count)
+        midpt_time_sec = round(midpt_frame / video_fps, 3)
+
+        phys_list: list[list[float]] = []
+        img_list: list[list[float]] = []
+        for name, (xp, yp) in _VERTEX_PHYS.items():
+            pos: list[float] | None = getattr(cv, name)
+            if pos is not None:
+                phys_list.append([xp, yp])
+                img_list.append(pos)  # already undistorted image coords
+
+        H = _dlt_homography(np.array(phys_list), np.array(img_list)) if len(phys_list) >= 4 else None
+
+        if H is None:
+            entries.append({
+                "chunk_id": chunk_id,
+                "midpt_frame": midpt_frame,
+                "midpt_time_sec": midpt_time_sec,
+                "img_corners_px": None,
+            })
+            continue
+
+        # Project the 4 court corners: near-left, near-right, far-right, far-left
+        corner_phys = [(0.0, 0.0), (_W, 0.0), (_W, _L), (0.0, _L)]
+        corners = []
+        for xp, yp in corner_phys:
+            xu, yu = _project(H, xp, yp)
+            xd, yd = _distort(xu, yu, cx, cy, k1, scale)
+            corners.append({"x": round(xd, 2), "y": round(yd, 2)})
+
+        entries.append({
+            "chunk_id": chunk_id,
+            "midpt_frame": midpt_frame,
+            "midpt_time_sec": midpt_time_sec,
+            "img_corners_px": corners,
+        })
+
+    return entries
 
 
 # ─── Pass class ───────────────────────────────────────────────────────────────
@@ -465,6 +603,10 @@ class Pass1:
         chunk_vertices = _compute_chunk_vertices(
             segment_analyses, court_lines, chunks, cx, cy, pass0_accepted.k1, scale,
         )
+        camera_model = _compute_camera_model(
+            chunk_vertices, cx, cy, pass0_accepted.k1, scale,
+            ctx.video_fps, ctx.video_duration_s, pass0_raw.median_count,
+        )
 
         progress.update(0.98, "write_outputs", "Writing raw outputs…")
         raw_dir = ctx.paths.pass_raw_dir
@@ -482,6 +624,7 @@ class Pass1:
             chunk_vertices=chunk_vertices,
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
+        (raw_dir / "camera-model.json").write_text(json.dumps(camera_model, indent=2))
 
         progress.update(1.0, "write_outputs", "Pass 1 complete")
         return result
@@ -491,6 +634,7 @@ class Pass1:
         return [
             a for a in [
                 {"role": "raw", "type": "json", "path": str(raw_dir / "result.json")},
+                {"role": "raw", "type": "json", "path": str(raw_dir / "camera-model.json")},
             ]
             if Path(a["path"]).exists()
         ]

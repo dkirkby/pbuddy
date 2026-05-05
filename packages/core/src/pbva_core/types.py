@@ -158,6 +158,8 @@ class Pass1SegmentAnalysis(BaseModel):
     lags: list[float | None]                    # per-chunk lag in sample units (None = not clean)
     similarities: list[float | None]            # per-chunk ZNCC similarity to reference
     positions: list[list[float] | None] = []   # per-chunk [x, y] image coord of the court line
+    is_interpolated: list[bool] = []            # per-chunk: lag was NaN and filled by interpolation
+    is_outlier: list[bool] = []                 # per-chunk: position was a line-fit outlier
 
 
 class Pass1ChunkVertices(BaseModel):
