@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import {
-  COURT_KV, COURT_TOTAL_WIDTH, COURT_TOTAL_LENGTH,
+  COURT_KV, COURT_TOTAL_WIDTH, COURT_TOTAL_LENGTH, COURT_NON_VOLLEY_DEPTH,
   NET_POST_HEIGHT, NET_CENTER_HEIGHT, NET_POST_TO_POST,
 } from '../lib/dimensions'
 import type { ArtifactRef, CourtCorner, CourtGeometry, Pass0RawResult } from '../types/api'
@@ -47,15 +47,15 @@ function distortPoint(
   return [cx + dx * (rd / ru) * scale, cy + dy * (rd / ru) * scale]
 }
 
-// ─── Net 3D projection helpers ────────────────────────────────────────────────
+// ─── Net 3D projection + camera geometry ─────────────────────────────────────
 // Coordinate system: X across net (left→right), Y up, Z along court (Z=0 at net).
 // Court corners at (±HALF_W, 0, ±HALF_L); net posts at (±NET_HALF_W, *, 0).
 
-const HALF_W = COURT_TOTAL_WIDTH  / 2   // 3.05 m
-const HALF_L = COURT_TOTAL_LENGTH / 2   // 6.705 m
-const NET_HALF_W = NET_POST_TO_POST / 2 // 3.355 m
+const HALF_W    = COURT_TOTAL_WIDTH  / 2   // 3.05 m
+const HALF_L    = COURT_TOTAL_LENGTH / 2   // 6.705 m
+const NET_HALF_W = NET_POST_TO_POST  / 2   // 3.355 m
 
-// Net profile vertices: left-post-base → left-post-top → center-top → right-post-top → right-post-base
+// Net profile: left-post-base → left-post-top → centre-top → right-post-top → right-post-base
 const NET_3D_POINTS: [number, number, number][] = [
   [-NET_HALF_W, 0,                 0],
   [-NET_HALF_W, NET_POST_HEIGHT,   0],
@@ -80,51 +80,52 @@ function mv33(M: number[], v: [number, number, number]): [number, number, number
   ]
 }
 
+interface CamProj {
+  P: number[]
+  rX: number[]
+  rY: number[]
+  rZ: number[]
+  t: number[]
+  cx: number
+  cy: number
+  k1: number
+  scale: number
+}
+
 /**
- * Build SVG polyline points for the net overlay using a pinhole camera model.
- * f = cx / tan(horizFOVdeg/2 in radians); K derived from f with square pixels
- * and principal point at (cx, cy). Extrinsics solved from ground-plane homography.
- * Returns null if any net vertex is behind the camera.
+ * Solve the full 3×4 projection matrix from the court homography and horizFOV.
+ * f = cx / tan(horizFOV/2); K = diag(f,f,1) with principal point (cx,cy).
+ * Extrinsics decomposed via K⁻¹ · H_phys; r_Y = r_Z × r_X.
  */
-function buildNetPolyline(
+function buildCamProj(
   g: CourtGeometry,
   bgW: number, bgH: number,
   k1: number,
   horizFOVdeg: number,
-): string | null {
+): CamProj | null {
   const cx = bgW / 2, cy = bgH / 2
   const scale = Math.sqrt(cx*cx + cy*cy)
+  const H  = buildUndistortedH(g, cx, cy, k1, scale)
+  const M  = [1/(2*HALF_W), 0, 0.5,  0, 1/(2*HALF_L), 0.5,  0, 0, 1]
+  const Hp = mul33(H, M)   // maps (X, Z, 1) → undistorted image
 
-  // Ground-plane homography: (X, Z) → undistorted image; Z along court, Z=0 at net.
-  // Hphys = H_uv * M  where u = X/(2·HALF_W)+0.5, v = Z/(2·HALF_L)+0.5
-  const H = buildUndistortedH(g, cx, cy, k1, scale)
-  const M = [1/(2*HALF_W), 0, 0.5, 0, 1/(2*HALF_L), 0.5, 0, 0, 1]
-  const Hp = mul33(H, M)
+  const f  = cx / Math.tan(horizFOVdeg * Math.PI / 360)
+  const Ki = [1/f, 0, -cx/f,  0, 1/f, -cy/f,  0, 0, 1]
 
-  const f = cx / Math.tan(horizFOVdeg * Math.PI / 360)
-  const Ki = [1/f, 0, -cx/f, 0, 1/f, -cy/f, 0, 0, 1]
+  const h1 = mv33(Ki, [Hp[0], Hp[3], Hp[6]])  // ≈ λ·r_X
+  const h2 = mv33(Ki, [Hp[1], Hp[4], Hp[7]])  // ≈ λ·r_Z
+  const h3 = mv33(Ki, [Hp[2], Hp[5], Hp[8]])  // ≈ λ·t
 
-  // Decompose: K_inv * Hphys gives [r_X | r_Z | t] up to scale lambda
-  const h1 = mv33(Ki, [Hp[0], Hp[3], Hp[6]])
-  const h2 = mv33(Ki, [Hp[1], Hp[4], Hp[7]])
-  const h3 = mv33(Ki, [Hp[2], Hp[5], Hp[8]])
-
-  const vn = (v: number[]) => Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
+  const vn  = (v: number[]) => Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
   const lam = (vn(h1) + vn(h2)) / 2
   if (lam < 1e-10) return null
 
   const rX = h1.map(x => x/lam)
   const rZ = h2.map(x => x/lam)
   const t  = h3.map(x => x/lam)
-  // r_Y = r_Z × r_X  → world-up in camera space (det(R)=1 for proper rotation)
-  const rY = [
-    rZ[1]*rX[2] - rZ[2]*rX[1],
-    rZ[2]*rX[0] - rZ[0]*rX[2],
-    rZ[0]*rX[1] - rZ[1]*rX[0],
-  ]
+  const rY = [rZ[1]*rX[2]-rZ[2]*rX[1], rZ[2]*rX[0]-rZ[0]*rX[2], rZ[0]*rX[1]-rZ[1]*rX[0]]
 
-  // P = K * [rX | rY | rZ | t]  (3×4 row-major)
-  const K = [f, 0, cx, 0, f, cy, 0, 0, 1]
+  const K  = [f, 0, cx,  0, f, cy,  0, 0, 1]
   const Rt = [
     rX[0], rY[0], rZ[0], t[0],
     rX[1], rY[1], rZ[1], t[1],
@@ -135,29 +136,134 @@ function buildNetPolyline(
     for (let c = 0; c < 4; c++)
       P[r*4+c] = K[r*3+0]*Rt[0*4+c] + K[r*3+1]*Rt[1*4+c] + K[r*3+2]*Rt[2*4+c]
 
-  const N_SAMPLES = 12  // samples per segment, including endpoints
+  return { P, rX, rY, rZ, t, cx, cy, k1, scale }
+}
+
+/** Camera centre in world coords: C = −Rᵀ·t  where R = [rX | rY | rZ]. */
+function camWorldPos(cp: CamProj): [number, number, number] {
+  const dot = (a: number[], b: number[]) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
+  return [-dot(cp.rX, cp.t), -dot(cp.rY, cp.t), -dot(cp.rZ, cp.t)]
+}
+
+/** Camera optical-axis direction in world coords: Rᵀ·ẑ_cam = [rX[2], rY[2], rZ[2]]. */
+function camWorldDir(cp: CamProj): [number, number, number] {
+  const d: [number, number, number] = [cp.rX[2], cp.rY[2], cp.rZ[2]]
+  const n = Math.sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2])
+  return n > 1e-10 ? [d[0]/n, d[1]/n, d[2]/n] : d
+}
+
+function buildNetPolyline(
+  g: CourtGeometry,
+  bgW: number, bgH: number,
+  k1: number,
+  horizFOVdeg: number,
+): string | null {
+  const cp = buildCamProj(g, bgW, bgH, k1, horizFOVdeg)
+  if (!cp) return null
+  const { P, cx, cy, k1: k, scale } = cp
+
+  const N_SAMPLES = 12
 
   function projectAndDistort(X: number, Y: number, Z: number): [number, number] | null {
     const u = P[0]*X + P[1]*Y + P[2]*Z + P[3]
     const v = P[4]*X + P[5]*Y + P[6]*Z + P[7]
     const w = P[8]*X + P[9]*Y + P[10]*Z + P[11]
     if (w <= 0) return null
-    return distortPoint(u/w, v/w, cx, cy, k1, scale)
+    return distortPoint(u/w, v/w, cx, cy, k, scale)
   }
 
   const pts: string[] = []
   for (let seg = 0; seg < NET_3D_POINTS.length - 1; seg++) {
     const [X0, Y0, Z0] = NET_3D_POINTS[seg]
     const [X1, Y1, Z1] = NET_3D_POINTS[seg + 1]
-    const start = seg === 0 ? 0 : 1  // skip first point of each segment (already added as last of prev)
+    const start = seg === 0 ? 0 : 1
     for (let i = start; i <= N_SAMPLES; i++) {
-      const t = i / N_SAMPLES
-      const p = projectAndDistort(X0 + t*(X1-X0), Y0 + t*(Y1-Y0), Z0 + t*(Z1-Z0))
+      const s = i / N_SAMPLES
+      const p = projectAndDistort(X0 + s*(X1-X0), Y0 + s*(Y1-Y0), Z0 + s*(Z1-Z0))
       if (!p) return null
       pts.push(`${p[0].toFixed(1)},${p[1].toFixed(1)}`)
     }
   }
   return pts.join(' ')
+}
+
+// ─── Court plan-view diagram ──────────────────────────────────────────────────
+
+const PLAN_SCALE = 18  // px per metre in the plan diagram
+
+interface PlanDiagramProps {
+  geometry: CourtGeometry
+  bgW: number
+  bgH: number
+  k1: number
+  horizFOV: number
+}
+
+function CourtPlanDiagram({ geometry, bgW, bgH, k1, horizFOV }: PlanDiagramProps) {
+  const cp = buildCamProj(geometry, bgW, bgH, k1, horizFOV)
+  if (!cp) return null
+
+  const [Cx, Cy, Cz] = camWorldPos(cp)
+  const [dx, , dz]   = camWorldDir(cp)   // horizontal (XZ) view direction
+  const NVZ = COURT_NON_VOLLEY_DEPTH
+
+  // Diagram bounds: court ∪ camera position with 1 m clearance
+  const minZ = Math.min(-HALF_L, Cz - 1.0)
+  const maxZ = Math.max( HALF_L, Cz + 1.0)
+
+  const MARGIN = 12
+  const diagW = Math.round(COURT_TOTAL_WIDTH * PLAN_SCALE + 2 * MARGIN)
+  const diagH = Math.round((maxZ - minZ)     * PLAN_SCALE + 2 * MARGIN)
+
+  // World → SVG coordinate transform
+  const wx = (x: number) => MARGIN + (x + HALF_W)    * PLAN_SCALE
+  const wz = (z: number) => MARGIN + (z - minZ)       * PLAN_SCALE
+
+  const camSx = wx(Cx)
+  const camSy = wz(Cz)
+  const ARROW = 22
+  const hd = Math.sqrt(dx*dx + dz*dz)
+  const adx = hd > 1e-6 ? (dx/hd) * ARROW : 0
+  const adz = hd > 1e-6 ? (dz/hd) * ARROW : 0
+
+  // Camera height formatting
+  const heightM  = Math.abs(Cy)
+  const totalIn  = heightM * 39.3701
+  const feet     = Math.floor(totalIn / 12)
+  const inchesRem = Math.round(totalIn % 12)
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <svg width={diagW} height={diagH}
+           style={{ display: 'block', background: '#111', borderRadius: 3 }}>
+        <defs>
+          <marker id="plan-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#ff0" />
+          </marker>
+        </defs>
+        {/* Court outline */}
+        <rect x={wx(-HALF_W)} y={wz(-HALF_L)}
+              width={COURT_TOTAL_WIDTH * PLAN_SCALE} height={COURT_TOTAL_LENGTH * PLAN_SCALE}
+              fill="none" stroke="#f00" strokeWidth={1} />
+        {/* Net line */}
+        <line x1={wx(-NET_HALF_W)} y1={wz(0)} x2={wx(NET_HALF_W)} y2={wz(0)}
+              stroke="#f00" strokeWidth={1.5} />
+        {/* Kitchen lines */}
+        <line x1={wx(-HALF_W)} y1={wz( NVZ)} x2={wx(HALF_W)} y2={wz( NVZ)} stroke="#f00" strokeWidth={0.75} />
+        <line x1={wx(-HALF_W)} y1={wz(-NVZ)} x2={wx(HALF_W)} y2={wz(-NVZ)} stroke="#f00" strokeWidth={0.75} />
+        {/* Centre service lines */}
+        <line x1={wx(0)} y1={wz( NVZ)} x2={wx(0)} y2={wz( HALF_L)} stroke="#f00" strokeWidth={0.75} />
+        <line x1={wx(0)} y1={wz(-NVZ)} x2={wx(0)} y2={wz(-HALF_L)} stroke="#f00" strokeWidth={0.75} />
+        {/* Camera position dot + pointing arrow */}
+        <circle cx={camSx} cy={camSy} r={3.5} fill="#ff0" />
+        <line x1={camSx} y1={camSy} x2={camSx + adx} y2={camSy + adz}
+              stroke="#ff0" strokeWidth={1.5} markerEnd="url(#plan-arrow)" />
+      </svg>
+      <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+        Camera height: {feet}′{inchesRem}″ / {heightM.toFixed(2)} m
+      </div>
+    </div>
+  )
 }
 
 // ─── Homography helpers ───────────────────────────────────────────────────────
@@ -622,6 +728,16 @@ export default function Pass0Page() {
               </p>
             )}
           </div>
+
+          {corners && rawResult && (
+            <CourtPlanDiagram
+              geometry={corners}
+              bgW={rawResult.bg_width}
+              bgH={rawResult.bg_height}
+              k1={k1}
+              horizFOV={horizFOV}
+            />
+          )}
         </div>
 
         {/* ── Right column: median image + zoom grid ── */}
