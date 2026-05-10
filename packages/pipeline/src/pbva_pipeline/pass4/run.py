@@ -1,126 +1,19 @@
-"""Pass 4 — Ball Detection: per-frame motion+color+silhouette mask over the stable video range."""
+"""Pass 4 — Ball Detection: per-frame motion+color mask over the stable video range."""
 
 from __future__ import annotations
 
 import json
-import math
 import time
 
 import cv2
 import numpy as np
 
-from pbva_core.dimensions import (
-    COURT_TOTAL_LENGTH,
-    COURT_TOTAL_WIDTH,
-    VOLUME_BOUNDARY_EXTENSION,
-    VOLUME_CORNER_HEIGHT,
-    VOLUME_NET_HEIGHT,
-)
-from pbva_core.types import CourtGeometry, Pass0AcceptedOutput, Pass1AcceptedOutput
+from pbva_core.types import Pass1AcceptedOutput
 from pbva_pipeline.base import PassContext
 
 
-def _build_homography(g: CourtGeometry) -> np.ndarray:
-    TL, TR = g.top_left,    g.top_right
-    BL, BR = g.bottom_left, g.bottom_right
-
-    A = TR.x - BR.x;  B = BL.x - BR.x
-    C = TL.x - TR.x - BL.x + BR.x
-    D = TR.y - BR.y;  E = BL.y - BR.y
-    F = TL.y - TR.y - BL.y + BR.y
-    det = A * E - B * D
-    gh = (C * E - B * F) / det
-    hh = (A * F - C * D) / det
-
-    return np.array([
-        [TR.x * (gh + 1) - TL.x,  BL.x * (hh + 1) - TL.x,  TL.x],
-        [TR.y * (gh + 1) - TL.y,  BL.y * (hh + 1) - TL.y,  TL.y],
-        [gh,                       hh,                        1   ],
-    ])
-
-
-def _compute_tent_mask(court_geo: CourtGeometry, bg_w: int, bg_h: int) -> np.ndarray:
-    """Return a uint8 mask (bg_h × bg_w) with 255 inside the tent silhouette, 0 outside."""
-    half_w = COURT_TOTAL_WIDTH  / 2
-    half_l = COURT_TOTAL_LENGTH / 2
-    hw_ext = half_w + VOLUME_BOUNDARY_EXTENSION
-    hl_ext = half_l + VOLUME_BOUNDARY_EXTENSION
-    ch     = VOLUME_CORNER_HEIGHT
-    nh     = VOLUME_NET_HEIGHT
-
-    vertices = [
-        (-hw_ext, -hl_ext, 0 ),
-        ( hw_ext, -hl_ext, 0 ),
-        ( hw_ext,  hl_ext, 0 ),
-        (-hw_ext,  hl_ext, 0 ),
-        (-hw_ext, -hl_ext, ch),
-        ( hw_ext, -hl_ext, ch),
-        ( hw_ext,  hl_ext, ch),
-        (-hw_ext,  hl_ext, ch),
-        (-hw_ext,  0,      nh),
-        ( hw_ext,  0,      nh),
-    ]
-
-    H = _build_homography(court_geo)
-    M = np.array([
-        [1 / (2 * half_w), 0,               0.5],
-        [0,                1 / (2 * half_l), 0.5],
-        [0,                0,               1  ],
-    ])
-    Hphys = H @ M
-
-    cx, cy = bg_w / 2.0, bg_h / 2.0
-    Hc = np.array([
-        [Hphys[0, 0] - cx * Hphys[2, 0],  Hphys[0, 1] - cx * Hphys[2, 1],  Hphys[0, 2] - cx * Hphys[2, 2]],
-        [Hphys[1, 0] - cy * Hphys[2, 0],  Hphys[1, 1] - cy * Hphys[2, 1],  Hphys[1, 2] - cy * Hphys[2, 2]],
-        [Hphys[2, 0],                      Hphys[2, 1],                      Hphys[2, 2]                    ],
-    ])
-    h1, h2 = Hc[:, 0], Hc[:, 1]
-
-    num, denom = h1[0] * h2[0] + h1[1] * h2[1], h1[2] * h2[2]
-    if abs(denom) < 1e-12 or num / denom > 0:
-        f = math.sqrt(abs(num / denom) or 1) * (bg_w + bg_h) / 4
-    else:
-        f = math.sqrt(-num / denom)
-
-    K     = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
-    K_inv = np.array([[1/f, 0, -cx/f], [0, 1/f, -cy/f], [0, 0, 1]])
-
-    r1_raw = K_inv @ Hphys[:, 0]
-    r2_raw = K_inv @ Hphys[:, 1]
-    t_raw  = K_inv @ Hphys[:, 2]
-
-    lam = float(np.linalg.norm(r1_raw))
-    r1  = r1_raw / lam
-    r2  = r2_raw / lam
-    r3  = np.cross(r1, r2)
-    t   = t_raw  / lam
-
-    Rt = np.column_stack([r1, r2, r3, t])
-    P  = K @ Rt
-
-    projected = []
-    for X, Y, Z in vertices:
-        uvw = P @ np.array([X, Y, -Z, 1.0])
-        if uvw[2] > 0:
-            projected.append([uvw[0] / uvw[2], uvw[1] / uvw[2]])
-
-    if len(projected) < 3:
-        return np.full((bg_h, bg_w), 255, dtype=np.uint8)
-
-    pts  = np.array(projected, dtype=np.float32)
-    hull = cv2.convexHull(pts)
-    mask = np.zeros((bg_h, bg_w), dtype=np.uint8)
-    cv2.fillConvexPoly(mask, hull.astype(np.int32), 255)
-    return mask
-
 # Must match Pass 3 histogram bin counts.
 _H_BINS, _S_BINS, _V_BINS = 48, 48, 8
-
-# Background median is computed from every BG_SUBSAMPLE-th frame in a sliding window of
-# CHUNK_SIZE frames. The same median is used for all detection frames in that chunk.
-CHUNK_SIZE   = 120
-BG_SUBSAMPLE = 10
 
 
 def detect_motion(frame, bg, close_kernel, threshold=20):
@@ -137,9 +30,9 @@ class Pass4:
     def validate_inputs(self, ctx: PassContext) -> None:
         if not ctx.video_path.exists():
             raise FileNotFoundError(f"Video not found: {ctx.video_path}")
-        pass0_accepted = ctx.paths.project_root / "passes" / "pass0" / "accepted"
-        if not (pass0_accepted / "result.json").exists():
-            raise FileNotFoundError("Pass 0 accepted result.json not found")
+        medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
+        if not any(medians_dir.glob("median_*.png")):
+            raise FileNotFoundError("Pass 0 raw medians not found — run Pass 0 first")
         pass1_accepted = ctx.paths.project_root / "passes" / "pass1" / "accepted"
         if not (pass1_accepted / "result.json").exists():
             raise FileNotFoundError("Pass 1 accepted result.json not found")
@@ -155,28 +48,21 @@ class Pass4:
             from pbva_pipeline.base import NullProgress
             progress = NullProgress()
 
-        progress.update(0.02, "setup", "Loading accepted outputs from pass 0 and pass 1…")
-        pass0_dir = ctx.paths.project_root / "passes" / "pass0"
-        pass0 = Pass0AcceptedOutput.model_validate_json(
-            (pass0_dir / "accepted" / "result.json").read_text()
-        )
+        progress.update(0.02, "setup", "Loading accepted output from pass 1…")
         pass1_dir = ctx.paths.project_root / "passes" / "pass1"
         p1 = Pass1AcceptedOutput.model_validate_json(
             (pass1_dir / "accepted" / "result.json").read_text()
         )
         bg_w, bg_h = p1.bg_width, p1.bg_height
 
-        progress.update(0.04, "setup", "Computing tent mask…")
-        tent_mask = _compute_tent_mask(pass0.court_geometry, bg_w, bg_h)
-
-        progress.update(0.05, "setup", "Loading ball radius from pass 3, rally bounds from pass 2…")
+        progress.update(0.04, "setup", "Loading ball radius from pass 3, rally bounds from pass 2…")
+        ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
         pass3_result_path = ctx.paths.project_root / "passes" / "pass3" / "accepted" / "result.json"
         if pass3_result_path.exists():
             pass3_result = json.loads(pass3_result_path.read_text())
             max_ball_radius = pass3_result.get("max_ball_radius") or 16
             min_blob_radius = (pass3_result.get("min_ball_radius") or 4) / 4
         else:
-            ann_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "annotations.json"
             _ann_data = json.loads(ann_path.read_text()).get("annotations", {}) if ann_path.exists() else {}
             _radii = [v.get("radius", 0) for v in _ann_data.values() if v.get("radius", 0) > 0]
             max_ball_radius = round(max(_radii)) if _radii else 16
@@ -203,6 +89,10 @@ class Pass4:
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video: {ctx.video_path}")
 
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        chunk_size = max(1, round(4.0 * fps))
+        medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
+
         video_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         in_frame  = rally_intervals[0][0]  if rally_intervals else 0
         out_frame = rally_intervals[-1][1] if rally_intervals else video_total_frames - 1
@@ -227,126 +117,106 @@ class Pass4:
         v_scale = _V_BINS / 256.0
 
         step = 0
+        current_chunk_idx = -1
+        median_bgr: np.ndarray | None = None
 
         for rally_start, rally_end in rally_intervals:
-            chunk_start = rally_start
+            cap.set(cv2.CAP_PROP_POS_FRAMES, rally_start)
 
-            cap.set(cv2.CAP_PROP_POS_FRAMES, chunk_start)
-            read_head = chunk_start
+            for T in range(rally_start, rally_end + 1):
+                in_rally_processed += 1
+                step += 1
+                frac = in_rally_processed / total_rally_frames if total_rally_frames else 0
 
-            while chunk_start <= rally_end:
-                chunk_bg_end = min(chunk_start + CHUNK_SIZE - 1, video_total_frames - 1)
-                detect_end   = min(chunk_start + CHUNK_SIZE - 1, rally_end)
+                if step % 30 == 0:
+                    progress.check_cancelled()
+                    if pause_file.exists():
+                        current_fraction = 0.1 + 0.88 * frac
+                        (raw_dir / "detections.json").write_text(json.dumps({
+                            "stable_frame_count": stable_frame_count,
+                            "first_stable_frame": in_frame,
+                            "last_stable_frame":  out_frame,
+                            "max_ball_radius":    max_ball_radius,
+                            "detection_count":    len(detections),
+                            "detections":         detections,
+                            "paused":             True,
+                        }, indent=2))
+                        while pause_file.exists():
+                            progress.check_cancelled()
+                            progress.update(
+                                current_fraction, "paused",
+                                f"Paused at rally frame {in_rally_processed}/{total_rally_frames} — {len(detections)} detections so far",
+                            )
+                            time.sleep(1.0)
 
-                # Read the full 120-frame chunk (or up to video end) sequentially.
-                frame_cache: dict[int, np.ndarray] = {}
-                while read_head <= chunk_bg_end:
-                    ok, frm = cap.read()
-                    if ok:
-                        frame_cache[read_head] = frm
-                    read_head += 1
+                if step % 150 == 0:
+                    progress.update(
+                        0.1 + 0.88 * frac,
+                        "detecting",
+                        f"Rally frame {in_rally_processed} of {total_rally_frames}…",
+                    )
 
-                # Compute median from every BG_SUBSAMPLE-th frame in the chunk.
-                samples = [
-                    frame_cache[f]
-                    for f in range(chunk_start, chunk_bg_end + 1, BG_SUBSAMPLE)
-                    if f in frame_cache
-                ]
-                if not samples:
-                    chunk_start = detect_end + 1
+                ok, frame = cap.read()
+                if not ok:
                     continue
-                median_bgr = np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
 
-                # Detect balls only in frames up to the rally end.
-                for T in range(chunk_start, detect_end + 1):
-                    in_rally_processed += 1
-                    step += 1
-                    frac = in_rally_processed / total_rally_frames if total_rally_frames else 0
+                ci = T // chunk_size
+                if ci != current_chunk_idx:
+                    median_bgr = cv2.imread(str(medians_dir / f"median_{ci:03d}.png"))
+                    current_chunk_idx = ci
 
-                    if step % 30 == 0:
-                        progress.check_cancelled()
-                        if pause_file.exists():
-                            current_fraction = 0.1 + 0.88 * frac
-                            (raw_dir / "detections.json").write_text(json.dumps({
-                                "stable_frame_count": stable_frame_count,
-                                "first_stable_frame": in_frame,
-                                "last_stable_frame":  out_frame,
-                                "max_ball_radius":    max_ball_radius,
-                                "detection_count":    len(detections),
-                                "detections":         detections,
-                                "paused":             True,
-                            }, indent=2))
-                            while pause_file.exists():
-                                progress.check_cancelled()
-                                progress.update(
-                                    current_fraction, "paused",
-                                    f"Paused at rally frame {in_rally_processed}/{total_rally_frames} — {len(detections)} detections so far",
-                                )
-                                time.sleep(1.0)
+                if median_bgr is None:
+                    continue
 
-                    if step % 150 == 0:
-                        progress.update(
-                            0.1 + 0.88 * frac,
-                            "detecting",
-                            f"Rally frame {in_rally_processed} of {total_rally_frames}…",
-                        )
+                # --- Motion mask ---
+                motion_mask = detect_motion(frame, median_bgr, close_kernel)
 
-                    frame = frame_cache.get(T)
-                    if frame is None:
-                        continue
+                # --- Color mask: vectorized 3D LUT lookup ---
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                h_bin = np.minimum((hsv[:, :, 0] * h_scale).astype(np.int32), _H_BINS - 1)
+                s_bin = np.minimum((hsv[:, :, 1] * s_scale).astype(np.int32), _S_BINS - 1)
+                v_bin = np.minimum((hsv[:, :, 2] * v_scale).astype(np.int32), _V_BINS - 1)
+                color_mask = hsv_mask[h_bin, s_bin, v_bin].astype(np.uint8) * 255
+                color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
 
-                    # --- Motion mask ---
-                    motion_mask = detect_motion(frame, median_bgr, close_kernel)
+                # --- Combined mask: motion AND color ---
+                combined = cv2.bitwise_and(motion_mask, color_mask)
 
-                    # --- Color mask: vectorized 3D LR_blurred lookup ---
-                    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                    h_bin = np.minimum((hsv[:, :, 0] * h_scale).astype(np.int32), _H_BINS - 1)
-                    s_bin = np.minimum((hsv[:, :, 1] * s_scale).astype(np.int32), _S_BINS - 1)
-                    v_bin = np.minimum((hsv[:, :, 2] * v_scale).astype(np.int32), _V_BINS - 1)
-                    color_mask = hsv_mask[h_bin, s_bin, v_bin].astype(np.uint8) * 255
-                    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, close_kernel)
+                # --- Blob detection ---
+                contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for contour in contours:
+                    (cx, cy), radius = cv2.minEnclosingCircle(contour)
+                    area = cv2.contourArea(contour)
+                    if min_blob_radius <= radius <= max_blob_radius and area >= 2.0:
+                        perimeter = cv2.arcLength(contour, closed=True)
+                        detections.append({
+                            "frame": T,
+                            "cx": round(float(cx), 1),
+                            "cy": round(float(cy), 1),
+                            "radius": round(float(radius), 1),
+                            "area": round(area, 1),
+                            "perimeter": round(perimeter, 1),
+                        })
 
-                    # --- Combined mask: motion AND color AND tent silhouette ---
-                    combined = cv2.bitwise_and(motion_mask, color_mask)
-                    combined = cv2.bitwise_and(combined, tent_mask)
-
-                    # --- Blob detection ---
-                    contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    for contour in contours:
-                        (cx, cy), radius = cv2.minEnclosingCircle(contour)
-                        area = cv2.contourArea(contour)
-                        if min_blob_radius <= radius <= max_blob_radius and area >= 2.0:
-                            perimeter = cv2.arcLength(contour, closed=True)
-                            detections.append({
-                                "frame": T,
-                                "cx": round(float(cx), 1),
-                                "cy": round(float(cy), 1),
-                                "radius": round(float(radius), 1),
-                                "area": round(area, 1),
-                                "perimeter": round(perimeter, 1),
-                            })
-
-                    # --- Annotation patch: 64×64 with R=motion, G=color, B=tent ---
-                    # Annotation keys are browser frame numbers (= frame_idx + 1).
-                    ann_key = T + 1
-                    if ann_key in ann_by_frame:
-                        ann = ann_by_frame[ann_key]
-                        ax, ay = int(round(ann["x"])), int(round(ann["y"]))
-                        sx1, sx2 = max(0, ax - half), min(bg_w, ax + half)
-                        sy1, sy2 = max(0, ay - half), min(bg_h, ay + half)
-                        dx1 = half - (ax - sx1);  dx2 = dx1 + (sx2 - sx1)
-                        dy1 = half - (ay - sy1);  dy2 = dy1 + (sy2 - sy1)
-                        patch = np.zeros((half * 2, half * 2, 3), dtype=np.uint8)
-                        patch[dy1:dy2, dx1:dx2, 2] = motion_mask[sy1:sy2, sx1:sx2]  # R
-                        patch[dy1:dy2, dx1:dx2, 1] = color_mask[sy1:sy2, sx1:sx2]   # G
-                        patch[dy1:dy2, dx1:dx2, 0] = tent_mask[sy1:sy2, sx1:sx2]    # B
-                        cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
-
-                chunk_start = detect_end + 1
+                # --- Annotation patch: 64×64 with R=motion, G=color ---
+                ann_key = T + 1
+                if ann_key in ann_by_frame:
+                    ann = ann_by_frame[ann_key]
+                    ax, ay = int(round(ann["x"])), int(round(ann["y"]))
+                    sx1, sx2 = max(0, ax - half), min(bg_w, ax + half)
+                    sy1, sy2 = max(0, ay - half), min(bg_h, ay + half)
+                    dx1 = half - (ax - sx1)
+                    dx2 = dx1 + (sx2 - sx1)
+                    dy1 = half - (ay - sy1)
+                    dy2 = dy1 + (sy2 - sy1)
+                    patch = np.zeros((half * 2, half * 2, 3), dtype=np.uint8)
+                    patch[dy1:dy2, dx1:dx2, 2] = motion_mask[sy1:sy2, sx1:sx2]  # R
+                    patch[dy1:dy2, dx1:dx2, 1] = color_mask[sy1:sy2, sx1:sx2]   # G
+                    cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
 
         cap.release()
 
-        # Build a B&W map of all detection locations at tent-mask resolution.
+        # Build a B&W map of all detection locations at frame resolution.
         det_map = np.zeros((bg_h, bg_w), dtype=np.uint8)
         for d in detections:
             cx, cy = int(round(d["cx"])), int(round(d["cy"]))
