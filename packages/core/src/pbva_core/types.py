@@ -98,11 +98,13 @@ class Pass0RawResult(BaseModel):
 class Pass0CorrectionPayload(BaseModel):
     court_geometry: CourtGeometry | None = None
     k1: float | None = None
+    horiz_fov: float | None = None
 
 
 class Pass0AcceptedOutput(BaseModel):
     court_geometry: CourtGeometry
     k1: float = 0.0
+    horiz_fov: float = 60.0
     bg_width: int
     bg_height: int
 

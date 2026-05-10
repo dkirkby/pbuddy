@@ -71,6 +71,7 @@ export interface Pass0RawResult {
 export interface Pass0CorrectionPayload {
   court_geometry?: CourtGeometry | null
   k1?: number | null
+  horiz_fov?: number | null
 }
 
 export interface Pass1Sample {

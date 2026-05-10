@@ -130,10 +130,12 @@ class Pass0:
             else _default_court(raw_result.bg_width, raw_result.bg_height)
         )
         k1 = corrections.k1 if corrections and corrections.k1 is not None else 0.0
+        horiz_fov = corrections.horiz_fov if corrections and corrections.horiz_fov is not None else 60.0
 
         accepted = Pass0AcceptedOutput(
             court_geometry=court_geo,
             k1=k1,
+            horiz_fov=horiz_fov,
             bg_width=raw_result.bg_width,
             bg_height=raw_result.bg_height,
         )
