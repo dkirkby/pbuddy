@@ -48,18 +48,19 @@ export default function Pass5Page() {
     }
   }, [savedCorrections])
 
-  // Pass 1 artifacts for median background image.
-  const { data: pass1Artifacts } = useQuery({
-    queryKey: ['pass1-artifacts', projectId],
-    queryFn: () => api.getPass1Artifacts(projectId!),
+  // Pass 0 artifacts for median background image (use the middle median as representative).
+  const { data: pass0Artifacts } = useQuery({
+    queryKey: ['pass0-artifacts', projectId],
+    queryFn: () => api.getPass0Artifacts(projectId!),
   })
 
   const bgMedianUrl = useMemo(() => {
-    const art = pass1Artifacts?.data?.find(
-      (a) => a.artifact_role === 'raw' && a.artifact_type === 'png' && a.path.includes('median_background')
-    )
-    return art ? api.artifactUrl(art.id) : null
-  }, [pass1Artifacts])
+    const pngs = (pass0Artifacts?.data ?? [])
+      .filter((a) => a.artifact_role === 'raw' && a.artifact_type === 'png')
+      .sort((a, b) => a.path.localeCompare(b.path))
+    const mid = pngs[Math.floor(pngs.length / 2)]
+    return mid ? api.artifactUrl(mid.id) : null
+  }, [pass0Artifacts])
 
   // Pass 4 detections for ball overlay.
   const { data: detectionsData } = useQuery({
