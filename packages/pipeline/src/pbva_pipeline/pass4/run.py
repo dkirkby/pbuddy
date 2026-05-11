@@ -89,7 +89,7 @@ class Pass4:
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video: {ctx.video_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        fps = cap.get(cv2.CAP_PROP_FPS) or ctx.video_fps or 30.0
         chunk_size = max(1, round(4.0 * fps))
         medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
 

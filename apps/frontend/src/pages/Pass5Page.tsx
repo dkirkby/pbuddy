@@ -142,6 +142,10 @@ export default function Pass5Page() {
     }
   }, [currentFrame, selectedSegId, segments])
 
+  const fps = pass2Meta?.fps ?? 30
+  const bgWidth = pass2Meta?.bg_width ?? 960
+  const bgHeight = pass2Meta?.bg_height ?? 540
+
   const pendingRectSet = useMemo(() => new Set(pendingRectIds ?? []), [pendingRectIds])
 
   // Segment paths for polyline rendering.
@@ -162,18 +166,19 @@ export default function Pass5Page() {
     return counts
   }, [segments])
 
-  // Segments visible at the current frame: those that contain it or have an endpoint within 8 frames.
+  // Segments visible at the current frame: those that contain it or have an endpoint within ~0.25 s.
   const visibleSegmentIds = useMemo(() => {
     const currentFi = currentFrame - 1  // convert browser→OpenCV numbering
+    const nearWindow = Math.round(0.25 * fps)
     const ids = new Set<number>()
     for (const seg of segments) {
       const inSeg = currentFi >= seg.first_frame && currentFi <= seg.last_frame
-      const nearStart = Math.abs(seg.first_frame - currentFi) <= 8
-      const nearEnd = Math.abs(seg.last_frame - currentFi) <= 8
+      const nearStart = Math.abs(seg.first_frame - currentFi) <= nearWindow
+      const nearEnd = Math.abs(seg.last_frame - currentFi) <= nearWindow
       if (inSeg || nearStart || nearEnd) ids.add(seg.id)
     }
     return ids
-  }, [segments, currentFrame])
+  }, [segments, currentFrame, fps])
 
   // Auto-scroll the table so the first highlighted row has at most 3 rows above it visible.
   useEffect(() => {
@@ -187,10 +192,6 @@ export default function Pass5Page() {
     const rowHeight = targetRow.offsetHeight || 24
     container.scrollTop = Math.max(0, (firstIdx - 3) * rowHeight)
   }, [visibleSegmentIds, segments])
-
-  const fps = pass2Meta?.fps ?? 30
-  const bgWidth = pass2Meta?.bg_width ?? 960
-  const bgHeight = pass2Meta?.bg_height ?? 540
 
   const deleteSegment = (id: number) => {
     setDeletedIds(prev => new Set([...prev, id]))

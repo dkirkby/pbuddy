@@ -136,7 +136,7 @@ export default function ProjectHome() {
       <div style={{ color: '#666', marginBottom: 16 }}>
         Status: <strong>{project.status}</strong>
         {project.video_duration_s && (
-          <span> · {Math.round(project.video_duration_s / 60)} min · {project.video_width}×{project.video_height}</span>
+          <span> · {Math.round(project.video_duration_s / 60)} min · {project.video_width}×{project.video_height}{project.video_fps != null && ` · ${project.video_fps} fps`}</span>
         )}
       </div>
       {!project.video_duration_s && (

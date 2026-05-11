@@ -384,16 +384,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
     }
 
     // Draw complete segment polyline for segments that include the current frame
-    // or have an endpoint within 8 frames of the current frame.
+    // or have an endpoint within ~0.25 s of the current frame.
     if (segmentPaths) {
       const currentFi = frameIndex - 1  // convert browser→OpenCV numbering
+      const nearWindow = Math.round(0.25 * fps)
       for (const seg of segmentPaths) {
         if (seg.detections.length < 2) continue
         const firstFrame = seg.detections[0].frame
         const lastFrame = seg.detections[seg.detections.length - 1].frame
         const inSegment = currentFi >= firstFrame && currentFi <= lastFrame
-        const nearStart = Math.abs(firstFrame - currentFi) <= 8
-        const nearEnd = Math.abs(lastFrame - currentFi) <= 8
+        const nearStart = Math.abs(firstFrame - currentFi) <= nearWindow
+        const nearEnd = Math.abs(lastFrame - currentFi) <= nearWindow
         if (!inSegment && !nearStart && !nearEnd) continue
         ctx.lineWidth = seg.highlighted ? 4 : 2
         ctx.strokeStyle = 'rgba(100, 210, 255, 0.85)'
@@ -406,13 +407,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPl
       }
     }
 
-    // Draw ball annotation circles (current frame full opacity, ±5 frames faded).
+    // Draw ball annotation circles (current frame full opacity, ±~0.17 s faded).
     // Red circle at annotated radius if radius > 0, otherwise fallback cyan circle.
     if (annotations) {
       ctx.lineWidth = 1.5
+      const annoWindow = Math.round(0.17 * fps)
       for (const [fi, ann] of Object.entries(annotations)) {
         const dist = Math.abs(parseInt(fi, 10) - frameIndex)
-        if (dist > 5) continue
+        if (dist > annoWindow) continue
         const opacity = dist === 0 ? 1.0 : 0.3
         const cx = ann.x * sx
         const cy = ann.y * sy

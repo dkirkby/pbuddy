@@ -178,7 +178,7 @@ def detect_blobs(
                     frame_count += 1
                     actual_out_time_s = ts
 
-                    if progress_callback is not None and frame_count % 300 == 0:
+                    if progress_callback is not None and frame_count % max(1, round(10.0 * fps)) == 0:
                         elapsed = ts - in_time_s
                         frac = progress_start + (progress_end - progress_start) * min(
                             elapsed / duration_s, 1.0
