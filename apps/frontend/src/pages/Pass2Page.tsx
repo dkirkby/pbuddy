@@ -94,12 +94,6 @@ function computePhaseInfo(
   return { isServePhase: false, targetType: 'existing-end', targetIndex: chosen.index }
 }
 
-function getServingTeamIndex(serverName: string, names: PlayerNames, farTeamServesFirst: boolean): 0 | 1 {
-  const farTeamWins = (serverName === names.far_team_right || serverName === names.far_team_left)
-  // team 0 in the game = far team when farTeamServesFirst, else near team
-  return farTeamWins === farTeamServesFirst ? 0 : 1
-}
-
 function makeGame(names: PlayerNames, farTeamServesFirst: boolean): PickleballDoublesGame {
   return new PickleballDoublesGame(
     names.far_team_right, names.far_team_left,
@@ -375,17 +369,19 @@ export default function Pass2Page() {
     setDirty(true)
   }
 
-  function handleRallyWinner(winningTeamIndex: 0 | 1) {
+  function handleRallyWinner(isFarTeamWinner: boolean) {
     if (farTeamServesFirst === null) return
     const { targetType, targetIndex } = phaseInfo
     if (targetType === 'pending-end') {
       if (!pendingRally) return
-      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(pendingRally.serverName, playerNames, farTeamServesFirst)
+      const serverIsFarTeam = pendingRally.serverName === playerNames.far_team_right || pendingRally.serverName === playerNames.far_team_left
+      const servingTeamWinsRally = isFarTeamWinner === serverIsFarTeam
       const record: RallyRecord = { ...pendingRally, stop_frame: currentFrameIndex, servingTeamWinsRally }
       setRallies(replayGame([...rallies, record], playerNames, farTeamServesFirst).updatedRallies)
       setPendingRally(null)
     } else if (targetType === 'existing-end') {
-      const servingTeamWinsRally = winningTeamIndex === getServingTeamIndex(rallies[targetIndex].serverName, playerNames, farTeamServesFirst)
+      const serverIsFarTeam = rallies[targetIndex].serverName === playerNames.far_team_right || rallies[targetIndex].serverName === playerNames.far_team_left
+      const servingTeamWinsRally = isFarTeamWinner === serverIsFarTeam
       const updated = [...rallies]
       updated[targetIndex] = { ...updated[targetIndex], stop_frame: currentFrameIndex, servingTeamWinsRally }
       setRallies(replayGame(updated, playerNames, farTeamServesFirst).updatedRallies)
@@ -530,9 +526,9 @@ export default function Pass2Page() {
       </p>
 
       {(() => {
-        const rows: { isFar: boolean; keys: [keyof PlayerNames, keyof PlayerNames]; labels: [string, string]; teamIndex: 0 | 1 }[] = [
-          { isFar: true,  keys: ['far_team_right',  'far_team_left'],   labels: ['Far Team Right',  'Far Team Left'],  teamIndex: 0 },
-          { isFar: false, keys: ['near_team_left',  'near_team_right'], labels: ['Near Team Left',  'Near Team Right'], teamIndex: 1 },
+        const rows: { isFar: boolean; keys: [keyof PlayerNames, keyof PlayerNames]; labels: [string, string] }[] = [
+          { isFar: true,  keys: ['far_team_right',  'far_team_left'],   labels: ['Far Team Right',  'Far Team Left'] },
+          { isFar: false, keys: ['near_team_left',  'near_team_right'], labels: ['Near Team Left',  'Near Team Right'] },
         ]
 
         // Whether a name cell is clickable as a serve trigger.
@@ -585,7 +581,7 @@ export default function Pass2Page() {
 
         return (
           <div style={{ marginBottom: 8 }}>
-            {rows.map(({ isFar, keys, labels, teamIndex }) => {
+            {rows.map(({ isFar, keys, labels }) => {
               const rallyWinnerEnabled = !servePhase && farTeamServesFirst !== null
               return (
                 <div key={keys[0]} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
@@ -610,7 +606,7 @@ export default function Pass2Page() {
                     )
                   })}
                   <button
-                    onClick={() => handleRallyWinner(teamIndex)}
+                    onClick={() => handleRallyWinner(isFar)}
                     disabled={!rallyWinnerEnabled}
                     style={{
                       padding: '5px 12px', fontSize: 13, whiteSpace: 'nowrap', alignSelf: 'flex-end',
