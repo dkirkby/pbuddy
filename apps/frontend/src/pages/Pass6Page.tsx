@@ -36,16 +36,31 @@ export default function Pass6Page() {
 
   const fps = project?.video_fps ?? 30
   const rallies: RallyRecord[] = pass2Corr?.data?.rally ?? []
+  const playerNames = pass2Corr?.data?.player_names
+
+  // Build a map from player name → their teammate, using the fixed team pairs.
+  const teammateOf = useMemo(() => {
+    if (!playerNames) return new Map<string, string>()
+    const pairs: [string, string][] = [
+      [playerNames.far_team_left, playerNames.far_team_right],
+      [playerNames.near_team_left, playerNames.near_team_right],
+    ]
+    const map = new Map<string, string>()
+    for (const [a, b] of pairs) {
+      map.set(a, b)
+      map.set(b, a)
+    }
+    return map
+  }, [playerNames])
 
   const rallyTimings = useMemo(() => {
-    let t = 0
-    return rallies.map((r) => {
+    const chapterStarts = pass6Result?.rally_chapter_starts
+    return rallies.map((r, i) => {
       const duration = (r.stop_frame - r.start_frame + 1) / fps
-      const outputStart = t
-      t += duration
+      const outputStart = chapterStarts?.[i] ?? null
       return { ...r, outputStart, duration }
     })
-  }, [rallies, fps])
+  }, [rallies, fps, pass6Result])
 
   const pass6State = project?.passes.find((p) => p.pass_name === 'pass6')?.state
 
@@ -134,7 +149,10 @@ export default function Pass6Page() {
               <th style={th}>#</th>
               <th style={th}>Score</th>
               <th style={th}>Server</th>
+              <th style={th}>Srv-Partner</th>
               <th style={th}>Receiver</th>
+              <th style={th}>Rcv-Partner</th>
+              <th style={th}>Point?</th>
               <th style={th}>Chapter start</th>
               <th style={th}>Duration</th>
             </tr>
@@ -145,8 +163,15 @@ export default function Pass6Page() {
                 <td style={td}>{i + 1}</td>
                 <td style={{ ...td, fontWeight: 'bold' }}>{r.score}</td>
                 <td style={td}>{r.serverName}</td>
+                <td style={td}>{teammateOf.get(r.serverName) ?? '—'}</td>
                 <td style={td}>{r.receiverName}</td>
-                <td style={{ ...td, fontFamily: 'monospace' }}>{formatTime(r.outputStart)}</td>
+                <td style={td}>{teammateOf.get(r.receiverName) ?? '—'}</td>
+                <td style={{ ...td, color: r.servingTeamWinsRally ? '#080' : '#c00' }}>
+                  {r.servingTeamWinsRally ? 'TRUE' : 'FALSE'}
+                </td>
+                <td style={{ ...td, fontFamily: 'monospace' }}>
+                  {r.outputStart !== null ? formatTime(r.outputStart) : '—'}
+                </td>
                 <td style={{ ...td, fontFamily: 'monospace' }}>{r.duration.toFixed(1)}s</td>
               </tr>
             ))}

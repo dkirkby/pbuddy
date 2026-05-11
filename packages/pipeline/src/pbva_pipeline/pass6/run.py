@@ -656,11 +656,23 @@ class Pass6:
         fade_s = fade_frames / fps
 
         # ------------------------------------------------------------------
-        # 2. Load Pass 1 median background images
+        # 2. Load median background images
+        #    New Pass 1 format: median_background_paths + median_window_times
+        #    Old Pass 1 format (pre-rework): fall back to Pass 0 medians
         # ------------------------------------------------------------------
         pass1_raw_path = ctx.paths.project_root / "passes" / "pass1" / "raw" / "result.json"
         pass1_raw = json.loads(pass1_raw_path.read_text())
-        median_images, median_window_times = _load_median_images(ctx.paths.project_root, pass1_raw)
+        if "median_background_paths" in pass1_raw:
+            median_images, median_window_times = _load_median_images(ctx.paths.project_root, pass1_raw)
+        else:
+            pass0_medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
+            median_paths = sorted(pass0_medians_dir.glob("median_*.png"))
+            if not median_paths:
+                raise FileNotFoundError("No median images found in pass0/raw/medians/")
+            median_images = [cv2.imread(str(p)) for p in median_paths]
+            n = len(median_images)
+            D = ctx.video_duration_s
+            median_window_times = [(i * D / n, (i + 1) * D / n) for i in range(n)]
 
         # ------------------------------------------------------------------
         # 3. Compute per-rally timing and chapter metadata
@@ -679,6 +691,8 @@ class Pass6:
                 "stop_frame": r["stop_frame"],
                 "chapter_start_s": cumulative_s,
                 "duration_s": section_duration_s,
+                "serverName": r.get("serverName", ""),
+                "receiverName": r.get("receiverName", ""),
             })
             cumulative_s += section_duration_s
             total_source_frames += n_frames
@@ -995,13 +1009,14 @@ class Pass6:
         # ------------------------------------------------------------------
         progress.update(0.98, "finalize", "Writing result…")
         chapter_timestamps = "\n".join(
-            f"{_fmt_yt_timestamp(c['chapter_start_s'])} {c['title']}"
+            f"{_fmt_yt_timestamp(c['chapter_start_s'])} {c['title']} {c['serverName']} serves to {c['receiverName']}"
             for c in chapter_info
         )
         result = Pass6RawResult(
             rally_count=len(rallies),
             output_duration_s=round(total_duration_s, 3),
             chapter_timestamps=chapter_timestamps,
+            rally_chapter_starts=[c["chapter_start_s"] for c in chapter_info],
         )
         (raw_dir / "result.json").write_text(result.model_dump_json(indent=2))
         progress.update(1.0, "done", f"Exported {len(rallies)} rallies ({total_duration_s:.1f}s)")
@@ -1033,15 +1048,18 @@ class Pass6:
             rally_count = raw_result.get("rally_count", 0)
             output_duration_s = raw_result.get("output_duration_s", 0.0)
             chapter_timestamps = raw_result.get("chapter_timestamps", "")
+            rally_chapter_starts = raw_result.get("rally_chapter_starts", [])
         else:
             rally_count = raw_result.rally_count
             output_duration_s = raw_result.output_duration_s
             chapter_timestamps = raw_result.chapter_timestamps
+            rally_chapter_starts = raw_result.rally_chapter_starts
 
         accepted = Pass6AcceptedOutput(
             rally_count=rally_count,
             output_duration_s=output_duration_s,
             chapter_timestamps=chapter_timestamps,
+            rally_chapter_starts=rally_chapter_starts,
         )
         (accepted_dir / "result.json").write_text(accepted.model_dump_json(indent=2))
         return accepted

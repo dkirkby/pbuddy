@@ -206,4 +206,5 @@ export interface Pass6RawResult {
   rally_count: number
   output_duration_s: number
   chapter_timestamps?: string
+  rally_chapter_starts?: number[]
 }

@@ -146,48 +146,54 @@ class Pass3:
                           n_sig_per_frame: dict[str, int], rmin: float,
                           progress, start: float, end: float,
                           nbg_nsig_ratio: int = 100) -> np.ndarray:
-        """For each annotated frame, randomly sample 20*N pixels outside 2*R exclusion circle."""
+        """For each annotated frame, randomly sample pixels outside 2*R exclusion circle from the Pass 0 median."""
         rng = np.random.default_rng(seed=42)
         total = len(annotations)
         all_hsv: list[np.ndarray] = []
 
-        cap = cv2.VideoCapture(str(ctx.video_path))
-        try:
-            for idx, (frame_key, ann) in enumerate(annotations.items()):
-                progress.update(start + (end - start) * idx / max(total, 1),
-                                 "bg", f"Background sampling frame {frame_key}…")
-                n_sig = n_sig_per_frame.get(frame_key, 0)
-                if n_sig == 0:
-                    continue
+        pass0_raw_path = ctx.paths.project_root / "passes" / "pass0" / "raw" / "result.json"
+        medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
+        median_count = 1
+        if pass0_raw_path.exists():
+            median_count = json.loads(pass0_raw_path.read_text()).get("median_count", 1) or 1
+        total_frames = max(ctx.video_fps * ctx.video_duration_s, 1.0)
+        bg_cache: dict[int, object] = {}
 
-                cx = ann.get("x", 0) if isinstance(ann, dict) else 0
-                cy = ann.get("y", 0) if isinstance(ann, dict) else 0
-                ann_radius = ann.get("radius", 0) if isinstance(ann, dict) else 0
-                excl_radius = 2.0 * (ann_radius if ann_radius > 0 else rmin)
+        for idx, (frame_key, ann) in enumerate(annotations.items()):
+            progress.update(start + (end - start) * idx / max(total, 1),
+                             "bg", f"Background sampling frame {frame_key}…")
+            n_sig = n_sig_per_frame.get(frame_key, 0)
+            if n_sig == 0:
+                continue
 
-                frame_idx = int(frame_key) - 1  # browser → OpenCV
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ok, frame = cap.read()
-                if not ok:
-                    continue
+            cx = ann.get("x", 0) if isinstance(ann, dict) else 0
+            cy = ann.get("y", 0) if isinstance(ann, dict) else 0
+            ann_radius = ann.get("radius", 0) if isinstance(ann, dict) else 0
+            excl_radius = 2.0 * (ann_radius if ann_radius > 0 else rmin)
 
-                fh, fw = frame.shape[:2]
-                ys, xs = np.mgrid[0:fh, 0:fw]
-                dist2 = (xs - cx) ** 2 + (ys - cy) ** 2
-                outside = dist2 > excl_radius ** 2
-                cand_y = ys[outside]
-                cand_x = xs[outside]
+            ocv = int(frame_key) - 1  # browser → OpenCV
+            chunk_idx = min(int(ocv * median_count / total_frames), median_count - 1)
+            if chunk_idx not in bg_cache:
+                bg_cache[chunk_idx] = cv2.imread(str(medians_dir / f"median_{chunk_idx:03d}.png"))
+            frame = bg_cache[chunk_idx]
+            if frame is None:
+                continue
 
-                n_want = nbg_nsig_ratio * n_sig
-                n_avail = len(cand_y)
-                if n_avail == 0:
-                    continue
-                chosen = rng.choice(n_avail, size=min(n_want, n_avail), replace=False)
+            fh, fw = frame.shape[:2]
+            ys, xs = np.mgrid[0:fh, 0:fw]
+            dist2 = (xs - cx) ** 2 + (ys - cy) ** 2
+            outside = dist2 > excl_radius ** 2
+            cand_y = ys[outside]
+            cand_x = xs[outside]
 
-                frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                all_hsv.append(frame_hsv[cand_y[chosen], cand_x[chosen]])
-        finally:
-            cap.release()
+            n_want = nbg_nsig_ratio * n_sig
+            n_avail = len(cand_y)
+            if n_avail == 0:
+                continue
+            chosen = rng.choice(n_avail, size=min(n_want, n_avail), replace=False)
+
+            frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            all_hsv.append(frame_hsv[cand_y[chosen], cand_x[chosen]])
 
         if all_hsv:
             bg_hsv = np.concatenate(all_hsv, axis=0).astype(np.float32)

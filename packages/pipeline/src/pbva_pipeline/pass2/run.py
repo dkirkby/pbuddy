@@ -22,16 +22,9 @@ class Pass2:
             raise FileNotFoundError(f"Video not found: {ctx.video_path}")
         if not ctx.prior_accepted:
             raise ValueError("Pass 1 accepted output is required for Pass 2")
-        p1_raw_result = ctx.paths.project_root / "passes" / "pass1" / "raw" / "result.json"
-        if not p1_raw_result.exists():
-            raise FileNotFoundError("Pass 1 raw result.json not found")
-        p1_data = json.loads(p1_raw_result.read_text())
-        median_paths = p1_data.get("median_background_paths", [])
-        if not median_paths:
-            raise FileNotFoundError("No median background images listed in Pass 1 result.json")
-        bg_path = ctx.paths.project_root / median_paths[0]
-        if not bg_path.exists():
-            raise FileNotFoundError(f"Median background not found: {bg_path}")
+        medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
+        if not medians_dir.exists() or not any(medians_dir.glob("median_*.png")):
+            raise FileNotFoundError("Pass 0 median images not found; run Pass 0 first")
 
     def run(self, ctx: PassContext, progress=None) -> Pass2RawResult:
         if progress is None:
@@ -93,26 +86,33 @@ class Pass2:
             raw_dst.mkdir(parents=True, exist_ok=True)
             bg_sub_dst.mkdir(parents=True, exist_ok=True)
 
-            p1_raw_result = ctx.paths.project_root / "passes" / "pass1" / "raw" / "result.json"
-            bg_plate = None
-            if p1_raw_result.exists():
-                p1_data = json.loads(p1_raw_result.read_text())
-                median_paths = p1_data.get("median_background_paths", [])
-                if median_paths:
-                    bg_plate_path = ctx.paths.project_root / median_paths[0]
-                    bg_plate = cv2.imread(str(bg_plate_path))
+            pass0_raw_path = ctx.paths.project_root / "passes" / "pass0" / "raw" / "result.json"
+            medians_dir = ctx.paths.project_root / "passes" / "pass0" / "raw" / "medians"
+            median_count = 1
+            if pass0_raw_path.exists():
+                median_count = json.loads(pass0_raw_path.read_text()).get("median_count", 1) or 1
+            total_frames = max(ctx.video_fps * ctx.video_duration_s, 1.0)
+            bg_cache: dict[int, object] = {}
+
+            def _get_bg(frame_key: str):
+                ocv = int(frame_key) - 1
+                ci = min(int(ocv * median_count / total_frames), median_count - 1)
+                if ci not in bg_cache:
+                    bg_cache[ci] = cv2.imread(str(medians_dir / f"median_{ci:03d}.png"))
+                return bg_cache[ci]
 
             for src_png in sorted(raw_src.glob("*.png")):
                 shutil.copy2(src_png, raw_dst / src_png.name)
 
-                if bg_plate is None:
-                    continue
                 raw_patch = cv2.imread(str(src_png))
                 if raw_patch is None:
                     continue
                 h, w = raw_patch.shape[:2]
                 frame_str = str(int(src_png.stem))
                 if frame_str not in ann_data:
+                    continue
+                bg_plate = _get_bg(frame_str)
+                if bg_plate is None:
                     continue
                 cx = int(round(ann_data[frame_str]["x"]))
                 cy = int(round(ann_data[frame_str]["y"]))
