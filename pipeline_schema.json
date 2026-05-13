@@ -182,6 +182,12 @@
             { "type": "artifact", "pass": "pass4", "file": "detections.json" }
           ]
         },
+        "scatter.png": {
+          "description": "Scatter plot of blob area vs. circularity for all motion-only blobs (steelblue) and all motion+color blobs (orange) across all rally frames; dashed reference lines mark the per-path filter thresholds",
+          "depends_on": [
+            { "type": "artifact", "pass": "pass4", "file": "detections.json" }
+          ]
+        },
         "patches/NNNNNN.png": {
           "description": "64×64 px composite diagnostic patch for each annotated frame; R=motion, G=color, B=tent, M=!color, C=!motion; frame number is the browser frame number (OpenCV + 1), zero-padded to 6 digits",
           "depends_on": [

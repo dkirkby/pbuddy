@@ -11,6 +11,7 @@ interface BallDetection {
   radius: number
   area: number
   perimeter: number
+  path: number  // bitmask: 1=motion-only, 2=motion+color, 3=both
 }
 
 export default function Pass4Page() {
@@ -49,7 +50,7 @@ export default function Pass4Page() {
     const out: Record<number, BallDetection[]> = {}
     for (const d of detectionsData.detections) {
       if (!out[d.frame]) out[d.frame] = []
-      out[d.frame].push({ cx: d.cx, cy: d.cy, radius: d.radius, area: d.area, perimeter: d.perimeter })
+      out[d.frame].push({ cx: d.cx, cy: d.cy, radius: d.radius, area: d.area, perimeter: d.perimeter, path: d.path ?? 2 })
     }
     return out
   }, [detectionsData])
@@ -263,10 +264,11 @@ export default function Pass4Page() {
           Frame {currentFrame} — {frameDets.length} detection{frameDets.length !== 1 ? 's' : ''}
         </div>
         {frameDets.length > 0 && (
-          <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%', maxWidth: 560 }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%', maxWidth: 620 }}>
             <thead>
               <tr style={{ background: '#f0f0f0' }}>
                 <th style={thStyle}>#</th>
+                <th style={thStyle}>path</th>
                 <th style={thStyle}>cx</th>
                 <th style={thStyle}>cy</th>
                 <th style={thStyle}>radius</th>
@@ -279,6 +281,15 @@ export default function Pass4Page() {
               {frameDets.map((d, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={tdStyle}>{i + 1}</td>
+                  <td style={{ ...tdStyle, textAlign: 'center' }}>
+                    <span style={{
+                      display: 'inline-block', padding: '1px 5px', borderRadius: 3, fontSize: 11,
+                      background: d.path === 1 ? '#4a90d9' : d.path === 3 ? '#7b4f9e' : '#e07820',
+                      color: '#fff',
+                    }}>
+                      {d.path === 1 ? 'M' : d.path === 3 ? 'MC' : 'C'}
+                    </span>
+                  </td>
                   <td style={tdStyle}>{d.cx}</td>
                   <td style={tdStyle}>{d.cy}</td>
                   <td style={tdStyle}>{d.radius}</td>
@@ -291,6 +302,22 @@ export default function Pass4Page() {
           </table>
         )}
       </div>
+      {/* Scatter plot: blob area vs. circularity */}
+      {detectionsData && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>
+            Blob area vs. circularity —
+            <span style={{ color: '#4a90d9' }}> ▪ motion only</span>,
+            <span style={{ color: '#e07820' }}> ▪ motion &amp; color</span>
+            ; dashed lines mark filter thresholds
+          </div>
+          <img
+            src={`${api.pass4ScatterUrl(projectId!)}?t=${detectionsData.detection_count}`}
+            style={{ maxWidth: '100%', border: '1px solid #ddd', borderRadius: 4 }}
+            alt="Blob area vs circularity"
+          />
+        </div>
+      )}
     </div>
   )
 }

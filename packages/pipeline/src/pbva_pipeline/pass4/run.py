@@ -61,12 +61,10 @@ class Pass4:
         if pass3_result_path.exists():
             pass3_result = json.loads(pass3_result_path.read_text())
             max_ball_radius = pass3_result.get("max_ball_radius") or 16
-            min_blob_radius = (pass3_result.get("min_ball_radius") or 4) / 4
         else:
             _ann_data = json.loads(ann_path.read_text()).get("annotations", {}) if ann_path.exists() else {}
             _radii = [v.get("radius", 0) for v in _ann_data.values() if v.get("radius", 0) > 0]
             max_ball_radius = round(max(_radii)) if _radii else 16
-            min_blob_radius = (round(min(_radii)) if _radii else 4) / 4
 
         # Rally frame numbers are browser-side (OpenCV frame_idx + 1); convert to OpenCV indices.
         rally_path = ctx.paths.project_root / "passes" / "pass2" / "accepted" / "rally.json"
@@ -105,12 +103,15 @@ class Pass4:
 
         close_kernel    = np.ones((5, 5), np.uint8)
         max_blob_radius = max_ball_radius + close_kernel.shape[0]
+        max_blob_area   = np.pi * max_blob_radius ** 2
         half = 32   # patch half-size → 64×64 output
 
         total_rally_frames = sum(e - s + 1 for s, e in rally_intervals)
         stable_frame_count = total_rally_frames
         in_rally_processed = 0
         detections: list[dict] = []
+        all_motion_scatter: list[tuple[float, float]] = []  # (area, circularity)
+        all_color_scatter:  list[tuple[float, float]] = []
 
         h_scale = _H_BINS / 181.0
         s_scale = _S_BINS / 256.0
@@ -182,20 +183,58 @@ class Pass4:
                 # --- Combined mask: motion AND color ---
                 combined = cv2.bitwise_and(motion_mask, color_mask)
 
-                # --- Blob detection ---
-                contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                for contour in contours:
+                # --- Blob detection: motion-only path (circularity + area cuts) ---
+                frame_motion: list[dict] = []
+                for contour in cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
                     (cx, cy), radius = cv2.minEnclosingCircle(contour)
                     area = cv2.contourArea(contour)
-                    if min_blob_radius <= radius <= max_blob_radius and area >= 2.0:
-                        perimeter = cv2.arcLength(contour, closed=True)
+                    perimeter = cv2.arcLength(contour, closed=True)
+                    circ = 4.0 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0.0
+                    all_motion_scatter.append((area, circ))
+                    if area <= max_blob_area and area >= 2.0 and circ >= 0.7:
+                        frame_motion.append({"cx": float(cx), "cy": float(cy), "radius": float(radius),
+                                             "area": area, "perimeter": perimeter})
+
+                # --- Blob detection: motion+color path (area cut only) ---
+                frame_combined: list[dict] = []
+                for contour in cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+                    (cx, cy), radius = cv2.minEnclosingCircle(contour)
+                    area = cv2.contourArea(contour)
+                    perimeter = cv2.arcLength(contour, closed=True)
+                    circ = 4.0 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0.0
+                    all_color_scatter.append((area, circ))
+                    if area <= max_blob_area and area >= 1.0:
+                        frame_combined.append({"cx": float(cx), "cy": float(cy), "radius": float(radius),
+                                               "area": area, "perimeter": perimeter})
+
+                # Merge: combined has priority; motion blob within max_ball_radius of a
+                # combined blob is suppressed (that combined blob gets path=3 instead of 2).
+                motion_used = [False] * len(frame_motion)
+                for cb in frame_combined:
+                    path = 2
+                    best_dist, best_j = float("inf"), -1
+                    for j, mb in enumerate(frame_motion):
+                        if motion_used[j]:
+                            continue
+                        d = ((cb["cx"] - mb["cx"]) ** 2 + (cb["cy"] - mb["cy"]) ** 2) ** 0.5
+                        if d < max_ball_radius and d < best_dist:
+                            best_dist, best_j = d, j
+                    if best_j >= 0:
+                        motion_used[best_j] = True
+                        path = 3
+                    detections.append({
+                        "frame": T,
+                        "cx": round(cb["cx"], 1), "cy": round(cb["cy"], 1),
+                        "radius": round(cb["radius"], 1), "area": round(cb["area"], 1),
+                        "perimeter": round(cb["perimeter"], 1), "path": path,
+                    })
+                for j, mb in enumerate(frame_motion):
+                    if not motion_used[j]:
                         detections.append({
                             "frame": T,
-                            "cx": round(float(cx), 1),
-                            "cy": round(float(cy), 1),
-                            "radius": round(float(radius), 1),
-                            "area": round(area, 1),
-                            "perimeter": round(perimeter, 1),
+                            "cx": round(mb["cx"], 1), "cy": round(mb["cy"], 1),
+                            "radius": round(mb["radius"], 1), "area": round(mb["area"], 1),
+                            "perimeter": round(mb["perimeter"], 1), "path": 1,
                         })
 
                 # --- Annotation patch: 64×64 with R=motion, G=color ---
@@ -215,6 +254,37 @@ class Pass4:
                     cv2.imwrite(str(patches_dir / f"{ann_key:06d}.png"), patch)
 
         cap.release()
+
+        # --- Scatter plot: blob area vs. circularity for both detection paths ---
+        progress.update(0.99, "scatter", "Generating blob scatter plot…")
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for scatter_data, color, label in (
+            (all_motion_scatter, "steelblue",  "motion only"),
+            (all_color_scatter,  "darkorange", "motion & color"),
+        ):
+            pts = [(a, c) for a, c in scatter_data if a > 0]
+            if pts:
+                xs, ys = zip(*pts)
+                ax.scatter(xs, ys, s=3, alpha=0.15, color=color, label=label, rasterized=True)
+        ax.axhline(0.7, color="steelblue",  linestyle="--", linewidth=0.8, alpha=0.7)
+        ax.axvline(2.0,  color="steelblue",  linestyle=":",  linewidth=0.8, alpha=0.7)
+        ax.axvline(1.0,  color="darkorange", linestyle="--", linewidth=0.8, alpha=0.7)
+        ax.axvline(max_blob_area, color="crimson", linestyle="--", linewidth=0.8, alpha=0.7)
+
+        ax.set_xscale("log")
+        ax.set_xlabel("Area (px²)")
+        ax.set_ylabel("Circularity  [4π·A / P²]")
+        ax.set_ylim(-0.05, 1.15)
+        ax.legend(fontsize=9)
+        ax.set_title(f"Pass 4 blob area vs. circularity  ({len(detections)} detections)")
+        ax.grid(True, which="both", linewidth=0.3, alpha=0.5)
+        fig.tight_layout()
+        fig.savefig(str(raw_dir / "scatter.png"), dpi=120)
+        plt.close(fig)
 
         # Build a B&W map of all detection locations at frame resolution.
         det_map = np.zeros((bg_h, bg_w), dtype=np.uint8)
@@ -239,8 +309,12 @@ class Pass4:
         return result
 
     def write_raw_outputs(self, ctx: PassContext, result: dict) -> list[dict]:
-        path = ctx.paths.pass_raw_dir / "detections.json"
-        return [{"role": "raw", "type": "json", "path": str(path)}] if path.exists() else []
+        artifacts = []
+        for fname, atype in (("detections.json", "json"), ("scatter.png", "png")):
+            p = ctx.paths.pass_raw_dir / fname
+            if p.exists():
+                artifacts.append({"role": "raw", "type": atype, "path": str(p)})
+        return artifacts
 
     def validate_corrections(self, payload: dict) -> dict:
         # Review/accept workflow not yet defined.

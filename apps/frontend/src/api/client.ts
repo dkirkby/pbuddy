@@ -127,6 +127,9 @@ export const api = {
   detectionsMapUrl: (projectId: string) =>
     `/api/projects/${projectId}/passes/pass4/raw/detections_map.png`,
 
+  pass4ScatterUrl: (projectId: string) =>
+    `/api/projects/${projectId}/passes/pass4/raw/scatter.png`,
+
   pass2AcceptedPatchUrl: (projectId: string, frame: number) =>
     `/api/projects/${projectId}/passes/pass2/accepted/patches/${String(frame).padStart(6, '0')}.png`,
 
