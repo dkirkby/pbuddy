@@ -724,7 +724,6 @@ def accept_pass2(
     # Build accepted output via the pass implementation.
     from pbva_pipeline.pass2.run import Pass2
     from pbva_pipeline.base import NullProgress, PassPaths, PassContext
-    from pbva_core.config import Settings as CoreSettings
 
     project = db.get(Project, project_id)
     pass_paths = PassPaths(
@@ -1160,7 +1159,7 @@ def get_pass5_corrections(
     from pbva_core import paths as p
     corrections_path = p.pass_corrections_dir(settings.data_root, project_id, "pass5") / "corrections.json"
     if not corrections_path.exists():
-        return {"deleted_segment_ids": []}
+        return {"deleted_track_ids": []}
     return json.loads(corrections_path.read_text())
 
 
@@ -1197,15 +1196,15 @@ def accept_pass5(
     accepted_dir = p.pass_accepted_dir(settings.data_root, project_id, "pass5")
     accepted_dir.mkdir(parents=True, exist_ok=True)
 
-    src = raw_dir / "segments.json"
+    src = raw_dir / "tracks.json"
     if src.exists():
         raw_data = json.loads(src.read_text())
         corrections_path = corrections_dir / "corrections.json"
         if corrections_path.exists():
-            deleted_ids = set(json.loads(corrections_path.read_text()).get("deleted_segment_ids", []))
-            raw_data["segments"] = [s for s in raw_data["segments"] if s["id"] not in deleted_ids]
-            raw_data["segment_count"] = len(raw_data["segments"])
-        (accepted_dir / "segments.json").write_text(json.dumps(raw_data, indent=2))
+            deleted_ids = set(json.loads(corrections_path.read_text()).get("deleted_track_ids", []))
+            raw_data["tracks"] = [t for t in raw_data["tracks"] if t["id"] not in deleted_ids]
+            raw_data["track_count"] = len(raw_data["tracks"])
+        (accepted_dir / "tracks.json").write_text(json.dumps(raw_data, indent=2))
 
     art_id = str(uuid.uuid4())
     db.add(Artifact(
@@ -1214,7 +1213,7 @@ def accept_pass5(
         pass_name="pass5",
         artifact_role=ArtifactRole.accepted.value,
         artifact_type="json",
-        path=str(accepted_dir / "segments.json"),
+        path=str(accepted_dir / "tracks.json"),
     ))
     pass_row.state = PassState.accepted.value
     pass_row.is_dirty = False
