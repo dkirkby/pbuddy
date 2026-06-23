@@ -47,7 +47,8 @@ export default function ProjectHome() {
   useProjectWebSocket(projectId ?? null, (msg) => {
     if (msg.type === 'job_progress') {
       const p = { passName: msg.payload.pass_name as string, stage: msg.payload.stage as string, fraction: msg.payload.progress as number }
-      console.log('[progress]', p.passName, p.stage, (p.fraction * 100).toFixed(1) + '%')
+      const detail = (msg.payload.message as string) || ''
+      console.log('[progress]', p.passName, p.stage, (p.fraction * 100).toFixed(1) + '%', detail)
       setProgress(p)
     } else if (msg.type === 'pass_waiting_for_user' || msg.type === 'pass_accepted') {
       setProgress(null)
@@ -103,6 +104,11 @@ export default function ProjectHome() {
       setProgress(null)
       qc.invalidateQueries({ queryKey: ['project', projectId] })
     },
+  })
+
+  const cancelPass5 = useMutation({
+    mutationFn: () => api.cancelPass5(projectId!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId] }),
   })
 
   const runPass6 = useMutation({
@@ -288,6 +294,8 @@ export default function ProjectHome() {
         isPending={runPass5.isPending}
         reviewPath={`/projects/${projectId}/pass5`}
         reviewLabel="Review →"
+        onCancel={() => cancelPass5.mutate()}
+        isCancelPending={cancelPass5.isPending}
       />
 
       {/* Pass 6 card */}
@@ -335,12 +343,16 @@ interface PassCardProps {
   alwaysReviewable?: boolean
   extraControls?: React.ReactNode
   extraButtons?: React.ReactNode
+  /** If provided, a Cancel button is shown while the pass is in-flight. */
+  onCancel?: () => void
+  isCancelPending?: boolean
 }
 
 function PassCard({
   title, description, pass, prereqMet, prereqLabel,
   progress, onRun, isPending, reviewPath, reviewLabel,
   hideRerun, alwaysReviewable, extraControls, extraButtons,
+  onCancel, isCancelPending,
 }: PassCardProps) {
   const navigate = useNavigate()
   const state = pass?.state ?? 'not_started'
@@ -413,6 +425,15 @@ function PassCard({
       )}
 
       <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {inFlight && onCancel && (
+          <button
+            onClick={onCancel}
+            disabled={isCancelPending}
+            style={{ padding: '6px 16px', cursor: 'pointer', background: '#c00', color: '#fff', border: 'none', borderRadius: 4, fontWeight: 600 }}
+          >
+            {isCancelPending ? 'Cancelling…' : 'Cancel'}
+          </button>
+        )}
         {!inFlight && RUNNABLE.has(state) && (
           <button
             onClick={onRun}

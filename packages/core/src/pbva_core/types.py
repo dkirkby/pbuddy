@@ -245,10 +245,8 @@ class Pass4AcceptedOutput(BaseModel):
 
 class Pass5RawResult(BaseModel):
     segment_count: int
-    max_gap_frames: int
-    large_gate_px: float
-    small_gate_px: float
-    min_segment_length: int
+    fps: float
+    R_px: float
 
 
 class Pass5AcceptedOutput(BaseModel):

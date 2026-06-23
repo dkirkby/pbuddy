@@ -88,6 +88,17 @@ export default function Pass5Page() {
   })
   const rallies = pass2Corrections?.data?.rally ?? []
 
+  const { data: passStatus } = useQuery({
+    queryKey: ['pass5-status', projectId],
+    queryFn: () => api.getPass(projectId!, 'pass5'),
+    refetchInterval: (query) => {
+      const state = query.state.data?.data?.state
+      return state === 'running' || state === 'queued' ? 2000 : false
+    },
+  })
+  const passState = passStatus?.data?.state ?? null
+  const isInFlight = passState === 'running' || passState === 'queued'
+
   const savePass5 = useMutation({
     mutationFn: () => api.savePass5Corrections(projectId!, [...deletedIds]),
     onSuccess: () => setDirty(false),
@@ -101,6 +112,23 @@ export default function Pass5Page() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       navigate(`/projects/${projectId}`)
+    },
+  })
+
+  const cancelPass5 = useMutation({
+    mutationFn: () => api.cancelPass5(projectId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pass5-status', projectId] })
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+    },
+  })
+
+  const rerunPass5 = useMutation({
+    mutationFn: () => api.runPass5(projectId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pass5-status', projectId] })
+      qc.invalidateQueries({ queryKey: ['pass5-segments', projectId] })
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
     },
   })
 
@@ -280,21 +308,38 @@ export default function Pass5Page() {
             <span style={{ fontSize: 13, color: '#555' }}>
               {segments.length} segment{segments.length !== 1 ? 's' : ''}
               {deletedIds.size > 0 && <span style={{ color: '#c00' }}> ({deletedIds.size} deleted)</span>}
-              {' · '}gap ≤ {segData.max_gap_frames} frames
-              {' · '}gate {segData.large_gate_px}px → {segData.small_gate_px}px
-              {' · '}min length {segData.min_segment_length}
+              {' · '}R={segData.R_px}px
+              {' · '}min {segData.min_segment_frames} frames
             </span>
+          )}
+          {isInFlight && (
+            <button
+              onClick={() => cancelPass5.mutate()}
+              disabled={cancelPass5.isPending}
+              style={{ padding: '6px 18px', background: '#c00', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+            >
+              {cancelPass5.isPending ? 'Cancelling…' : 'Cancel'}
+            </button>
+          )}
+          {!isInFlight && (
+            <button
+              onClick={() => rerunPass5.mutate()}
+              disabled={rerunPass5.isPending}
+              style={{ padding: '6px 18px', cursor: 'pointer' }}
+            >
+              {rerunPass5.isPending ? 'Queuing…' : 'Re-run Pass 5'}
+            </button>
           )}
           <button
             onClick={() => savePass5.mutate()}
-            disabled={!dirty || savePass5.isPending || accepting}
+            disabled={!dirty || savePass5.isPending || accepting || isInFlight}
             style={{ padding: '6px 18px', cursor: 'pointer' }}
           >
             {savePass5.isPending ? 'Saving…' : 'Save'}
           </button>
           <button
             onClick={() => { setAccepting(true); acceptPass5.mutate() }}
-            disabled={accepting || acceptPass5.isPending || !segData}
+            disabled={accepting || acceptPass5.isPending || !segData || isInFlight}
             style={{ padding: '6px 18px', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
           >
             {accepting ? 'Accepting…' : 'Accept Pass 5 →'}
@@ -461,6 +506,20 @@ export default function Pass5Page() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Corner plot: per-frame pos/vel/accel distributions */}
+      {segData && segData.segment_count > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>
+            Kinematic corner plot — per-frame pos / vel / accel across all segments
+          </div>
+          <img
+            src={`${api.pass5CornerUrl(projectId!)}?t=${segData.segment_count}`}
+            style={{ maxWidth: '100%', border: '1px solid #ddd', borderRadius: 4 }}
+            alt="Kinematic corner plot"
+          />
         </div>
       )}
     </div>

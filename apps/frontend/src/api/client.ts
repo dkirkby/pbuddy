@@ -112,6 +112,9 @@ export const api = {
   runPass5: (projectId: string) =>
     post<{ ok: boolean; data: JobSummary }>(`/api/projects/${projectId}/passes/pass5/run`),
 
+  cancelPass5: (projectId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/cancel`),
+
   getPass5Corrections: (projectId: string) =>
     get<{ deleted_segment_ids: number[] }>(`/api/projects/${projectId}/passes/pass5/corrections`),
 
@@ -123,6 +126,9 @@ export const api = {
 
   getPass5Segments: (projectId: string) =>
     get<Pass5Segments>(`/api/projects/${projectId}/passes/pass5/raw/segments.json`),
+
+  pass5CornerUrl: (projectId: string) =>
+    `/api/projects/${projectId}/passes/pass5/raw/corner.png`,
 
   detectionsMapUrl: (projectId: string) =>
     `/api/projects/${projectId}/passes/pass4/raw/detections_map.png`,

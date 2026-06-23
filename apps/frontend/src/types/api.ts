@@ -195,11 +195,21 @@ export interface Pass5Segment {
 
 export interface Pass5Segments {
   segment_count: number
-  max_gap_frames: number
-  large_gate_px: number
-  small_gate_px: number
-  min_segment_length: number
+  fps: number
+  R_px: number
+  residual_tol_px: number
+  smooth_pos_tol_px: number
+  smooth_vel_tol_px_s: number
+  smooth_acc_tol_px_s2: number
+  min_segment_frames: number
   segments: Pass5Segment[]
+  summary: {
+    n_input_detections: number
+    n_valid_window_states: number
+    n_candidate_segments: number
+    n_selected_segments: number
+    n_assigned_detections: number
+  }
 }
 
 export interface Pass6RawResult {

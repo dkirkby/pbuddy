@@ -1104,8 +1104,32 @@ def accept_pass4(
 
 
 # ---------------------------------------------------------------------------
-# Pass 5 — Segment Building: raw file access, accept
+# Pass 5 — Segment Building: raw file access, cancel, accept
 # ---------------------------------------------------------------------------
+
+
+@router.post("/{project_id}/passes/pass5/cancel")
+def cancel_pass5(
+    project_id: str,
+    db: Session = Depends(get_db),
+):
+    pass_row = _get_pass_or_404(db, project_id, "pass5")
+    if pass_row.state not in _IN_FLIGHT:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pass 5 is in state '{pass_row.state}', not cancellable",
+        )
+    if pass_row.current_job_id:
+        job = db.get(Job, pass_row.current_job_id)
+        if job and job.status in ("running", "queued", "cancel_requested"):
+            # For a running job: signal the worker to stop via cancel_requested.
+            # For a queued job: mark it cancelled immediately so the worker skips it.
+            job.status = "cancel_requested" if job.status == "running" else "cancelled"
+    pass_row.state = PassState.cancelled.value
+    pass_row.current_job_id = None
+    pass_row.updated_at = _utcnow()
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/{project_id}/passes/pass5/raw/{filename}")
@@ -1123,6 +1147,8 @@ def get_pass5_raw_file(
         raise HTTPException(status_code=403, detail="Access denied")
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
+    if path.suffix == ".png":
+        return FileResponse(str(path), media_type="image/png")
     return JSONResponse(content=json.loads(path.read_text()))
 
 
