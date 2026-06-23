@@ -184,32 +184,25 @@ export interface Pass2RawResult {
   bg_height: number
 }
 
-export interface Pass5Segment {
+export interface Pass5Track {
   id: number
+  rally_id: number
   first_frame: number
   last_frame: number
-  length: number
-  mean_speed_px_per_frame: number
+  n_segments: number
+  n_detections: number
+  intersections: [number, number, number][]   // [x, y, t_sec]
+  smooth_first_frame: number                  // OpenCV frame index of smooth[0]
+  smooth: [number, number][]                  // one [cx, cy] per frame
   detections: { frame: number; cx: number; cy: number; radius: number }[]
 }
 
-export interface Pass5Segments {
-  segment_count: number
+export interface Pass5Tracks {
+  track_count: number
   fps: number
-  R_px: number
-  residual_tol_px: number
-  smooth_pos_tol_px: number
-  smooth_vel_tol_px_s: number
-  smooth_acc_tol_px_s2: number
-  min_segment_frames: number
-  segments: Pass5Segment[]
-  summary: {
-    n_input_detections: number
-    n_valid_window_states: number
-    n_candidate_segments: number
-    n_selected_segments: number
-    n_assigned_detections: number
-  }
+  bg_width: number
+  bg_height: number
+  tracks: Pass5Track[]
 }
 
 export interface Pass6RawResult {

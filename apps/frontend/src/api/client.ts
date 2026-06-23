@@ -5,7 +5,7 @@ import type {
   Pass0CorrectionPayload,
   Pass1CorrectionPayload,
   Pass2Corrections,
-  Pass5Segments,
+  Pass5Tracks,
   Pass6RawResult,
   ProjectDetail,
   ProjectSummary,
@@ -116,19 +116,16 @@ export const api = {
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/cancel`),
 
   getPass5Corrections: (projectId: string) =>
-    get<{ deleted_segment_ids: number[] }>(`/api/projects/${projectId}/passes/pass5/corrections`),
+    get<{ deleted_track_ids: number[] }>(`/api/projects/${projectId}/passes/pass5/corrections`),
 
-  savePass5Corrections: (projectId: string, deletedSegmentIds: number[]) =>
-    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/corrections`, { deleted_segment_ids: deletedSegmentIds }),
+  savePass5Corrections: (projectId: string, deletedTrackIds: number[]) =>
+    put<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/corrections`, { deleted_track_ids: deletedTrackIds }),
 
   acceptPass5: (projectId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/passes/pass5/accept`),
 
-  getPass5Segments: (projectId: string) =>
-    get<Pass5Segments>(`/api/projects/${projectId}/passes/pass5/raw/segments.json`),
-
-  pass5CornerUrl: (projectId: string) =>
-    `/api/projects/${projectId}/passes/pass5/raw/corner.png`,
+  getPass5Tracks: (projectId: string) =>
+    get<Pass5Tracks>(`/api/projects/${projectId}/passes/pass5/raw/tracks.json`),
 
   detectionsMapUrl: (projectId: string) =>
     `/api/projects/${projectId}/passes/pass4/raw/detections_map.png`,
