@@ -23,8 +23,6 @@ frame-by-frame positions that preserve retained kink discontinuities.
 
 
 from itertools import combinations, product
-from pathlib import Path
-import json
 import math
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -661,7 +659,13 @@ class Track:
                     if estimate is not None:
                         estimates.append(estimate)
 
-            smoothed_samples.append((float(t), np.mean(estimates, axis=0)))
+            if estimates:
+                smoothed_samples.append((float(t), np.mean(estimates, axis=0)))
+            else:
+                # All parabola stencils failed (e.g. duplicate sample times from
+                # overlapping segments); fall back to nearest-neighbour position.
+                idx = int(np.argmin(np.abs(times - float(t))))
+                smoothed_samples.append((float(t), xy[idx].copy()))
 
         return smoothed_samples
 
@@ -1062,7 +1066,6 @@ def find_tracks_for_rally(
     """
 
     segments = [ ]
-    num_frames = len(detections_by_frame)
     for frame, detections in enumerate(detections_by_frame):
         if len(detections) == 0:
             continue
