@@ -115,8 +115,8 @@ def _render_trail_overlay(
         return None
 
     h, w = frame_bgr.shape[:2]
-    N = max(2, round(trail_s * fps))
-    win_start = source_frame_number - N + 1
+    t_end   = source_frame_number / fps
+    t_start = t_end - trail_s
 
     overlay = np.zeros((h, w, 4), dtype=np.uint8)
     has_any = False
@@ -124,28 +124,38 @@ def _render_trail_overlay(
     for track in tracks:
         first_frame = track["first_frame"]
         last_frame  = track["last_frame"]
-        if last_frame < win_start or first_frame > source_frame_number:
+        if last_frame / fps < t_start or first_frame / fps > t_end:
             continue
 
-        smooth      = track["smooth"]           # list of [cx, cy], one per frame
-        base_frame  = track["smooth_first_frame"]  # OpenCV frame of smooth[0]
-        n_smooth    = len(smooth)
+        smooth     = track["smooth"]            # list of [cx, cy], one per frame
+        base_frame = track["smooth_first_frame"]  # OpenCV frame of smooth[0]
 
-        for i in range(N - 1):
-            f0 = win_start + i
-            f1 = f0 + 1
-            idx0 = f0 - base_frame
-            idx1 = f1 - base_frame
-            if not (0 <= idx0 < n_smooth and 0 <= idx1 < n_smooth):
-                continue
-            p0 = smooth[idx0]
-            p1 = smooth[idx1]
-            t_frac = i / (N - 2) if N > 2 else 1.0
+        # Collect time-tagged points from smooth samples within the window.
+        points: list[tuple[float, float, float]] = []
+        for i, (cx, cy) in enumerate(smooth):
+            t = (base_frame + i) / fps
+            if t_start <= t <= t_end:
+                points.append((t, float(cx), float(cy)))
+
+        # Inject intersection (bounce) points — mirrors Track.get_points().
+        for x, y, t in track.get("intersections", []):
+            if t_start <= t <= t_end:
+                points.append((float(t), float(x), float(y)))
+
+        if len(points) < 2:
+            continue
+
+        points.sort(key=lambda p: p[0])
+
+        for i in range(len(points) - 1):
+            # Use segment midpoint time for opacity/width gradation.
+            t_mid  = (points[i][0] + points[i + 1][0]) * 0.5
+            t_frac = max(0.0, min(1.0, (t_mid - t_start) / trail_s))
             opacity = 0.05 + 0.75 * t_frac
-            line_w = max(1, round(1 + 5 * t_frac))
-            alpha = int(opacity * 255)
-            pt0 = (int(round(p0[0])), int(round(p0[1])))
-            pt1 = (int(round(p1[0])), int(round(p1[1])))
+            line_w  = max(1, round(1 + 5 * t_frac))
+            alpha   = int(opacity * 255)
+            pt0 = (int(round(points[i][1])),     int(round(points[i][2])))
+            pt1 = (int(round(points[i + 1][1])), int(round(points[i + 1][2])))
             # Yellow in BGR = (0, 255, 255); BGRA channel order for cv2.line.
             cv2.line(overlay, pt0, pt1, (0, 255, 255, alpha), line_w, cv2.LINE_AA)
             has_any = True
