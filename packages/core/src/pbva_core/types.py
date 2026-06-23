@@ -244,13 +244,13 @@ class Pass4AcceptedOutput(BaseModel):
 
 
 class Pass5RawResult(BaseModel):
-    segment_count: int
+    track_count: int
     fps: float
-    R_px: float
+    image_scale: float
 
 
 class Pass5AcceptedOutput(BaseModel):
-    segment_count: int
+    track_count: int
 
 
 # ---------------------------------------------------------------------------
