@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { VideoPlayer } from '../components/VideoPlayer'
 import type { VideoPlayerHandle } from '../components/VideoPlayer'
-import type { Pass5Segment } from '../types/api'
+import type { Pass5Track } from '../types/api'
 
 export default function Pass5Page() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -17,8 +17,8 @@ export default function Pass5Page() {
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set())
   const [deleteHistory, setDeleteHistory] = useState<number[]>([])
   const [dirty, setDirty] = useState(false)
-  const [selectedSegId, setSelectedSegId] = useState<number | null>(null)
-  const [hoveredSegId, setHoveredSegId] = useState<number | null>(null)
+  const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
+  const [hoveredTrackId, setHoveredTrackId] = useState<number | null>(null)
   const hasEnteredSelectedRef = useRef(false)
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
@@ -27,9 +27,9 @@ export default function Pass5Page() {
   const isDraggingRef = useRef(false)
   const wasDraggingRef = useRef(false)
 
-  const { data: segData, isLoading } = useQuery({
-    queryKey: ['pass5-segments', projectId],
-    queryFn: () => api.getPass5Segments(projectId!),
+  const { data: trackData, isLoading } = useQuery({
+    queryKey: ['pass5-tracks', projectId],
+    queryFn: () => api.getPass5Tracks(projectId!),
   })
 
   const { data: savedCorrections } = useQuery({
@@ -41,7 +41,7 @@ export default function Pass5Page() {
   useEffect(() => {
     if (!savedCorrections || correctionsLoadedRef.current) return
     correctionsLoadedRef.current = true
-    const ids = savedCorrections.deleted_segment_ids ?? []
+    const ids = savedCorrections.deleted_track_ids ?? []
     if (ids.length > 0) {
       setDeletedIds(new Set(ids))
       setDeleteHistory(ids)
@@ -127,48 +127,46 @@ export default function Pass5Page() {
     mutationFn: () => api.runPass5(projectId!),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pass5-status', projectId] })
-      qc.invalidateQueries({ queryKey: ['pass5-segments', projectId] })
+      qc.invalidateQueries({ queryKey: ['pass5-tracks', projectId] })
       qc.invalidateQueries({ queryKey: ['project', projectId] })
     },
   })
 
-  const segments: Pass5Segment[] = (segData?.segments ?? []).filter(s => !deletedIds.has(s.id))
+  const tracks: Pass5Track[] = (trackData?.tracks ?? []).filter(t => !deletedIds.has(t.id))
 
-  // Per-frame ball detection index (OpenCV frame numbers), restricted to detections used in a segment.
+  // Per-frame ball detection index (OpenCV frame numbers), restricted to detections used in a track.
   const ballDetections = useMemo(() => {
     if (!detectionsData?.detections) return {}
-    const segmentKeys = new Set<string>()
-    for (const seg of segments) {
-      for (const d of seg.detections) segmentKeys.add(`${d.frame}:${d.cx}:${d.cy}`)
+    const trackKeys = new Set<string>()
+    for (const track of tracks) {
+      for (const d of track.detections) trackKeys.add(`${d.frame}:${d.cx}:${d.cy}`)
     }
     const out: Record<number, { cx: number; cy: number; radius: number }[]> = {}
     for (const d of detectionsData.detections) {
-      if (!segmentKeys.has(`${d.frame}:${d.cx}:${d.cy}`)) continue
+      if (!trackKeys.has(`${d.frame}:${d.cx}:${d.cy}`)) continue
       if (!out[d.frame]) out[d.frame] = []
       out[d.frame].push({ cx: d.cx, cy: d.cy, radius: d.radius })
     }
     return out
-  }, [detectionsData, segments])
+  }, [detectionsData, tracks])
 
-  // Clear selection when playback moves outside the selected segment's range,
-  // but only after the frame has first entered the segment (avoids clearing on the
-  // initial seek when clicking a row while the video is outside that segment).
+  // Clear selection when playback moves outside the selected track's range.
   useEffect(() => {
     hasEnteredSelectedRef.current = false
-  }, [selectedSegId])
+  }, [selectedTrackId])
 
   useEffect(() => {
-    if (selectedSegId === null) return
-    const sel = segments.find(s => s.id === selectedSegId)
-    if (!sel) { setSelectedSegId(null); return }
+    if (selectedTrackId === null) return
+    const sel = tracks.find(t => t.id === selectedTrackId)
+    if (!sel) { setSelectedTrackId(null); return }
     const currentFi = currentFrame - 1
     const inRange = currentFi >= sel.first_frame && currentFi <= sel.last_frame
     if (inRange) {
       hasEnteredSelectedRef.current = true
     } else if (hasEnteredSelectedRef.current) {
-      setSelectedSegId(null)
+      setSelectedTrackId(null)
     }
-  }, [currentFrame, selectedSegId, segments])
+  }, [currentFrame, selectedTrackId, tracks])
 
   const fps = pass2Meta?.fps ?? 30
   const bgWidth = pass2Meta?.bg_width ?? 960
@@ -176,52 +174,60 @@ export default function Pass5Page() {
 
   const pendingRectSet = useMemo(() => new Set(pendingRectIds ?? []), [pendingRectIds])
 
-  // Segment paths for polyline rendering.
-  const segmentPaths = useMemo(() =>
-    segments.map(seg => ({ id: seg.id, highlighted: seg.id === selectedSegId, detections: seg.detections })),
-  [segments, selectedSegId])
+  // Track paths for VideoPlayer overlay: smooth array → frame-indexed detections format.
+  const trackPaths = useMemo(() =>
+    tracks.map(track => ({
+      id: track.id,
+      highlighted: track.id === selectedTrackId,
+      detections: track.smooth.map((pt, i) => ({
+        frame: track.smooth_first_frame + i,
+        cx: pt[0],
+        cy: pt[1],
+      })),
+    })),
+  [tracks, selectedTrackId])
 
-  // Per-segment count of other segments that share at least one frame.
+  // Per-track count of other tracks that share at least one frame.
   const overlapCounts = useMemo(() => {
     const counts: Record<number, number> = {}
-    for (const a of segments) {
+    for (const a of tracks) {
       let count = 0
-      for (const b of segments) {
+      for (const b of tracks) {
         if (b.id !== a.id && a.first_frame <= b.last_frame && b.first_frame <= a.last_frame) count++
       }
       counts[a.id] = count
     }
     return counts
-  }, [segments])
+  }, [tracks])
 
-  // Segments visible at the current frame: those that contain it or have an endpoint within ~0.25 s.
-  const visibleSegmentIds = useMemo(() => {
+  // Tracks visible at the current frame: those that contain it or have an endpoint within ~0.25 s.
+  const visibleTrackIds = useMemo(() => {
     const currentFi = currentFrame - 1  // convert browser→OpenCV numbering
     const nearWindow = Math.round(0.25 * fps)
     const ids = new Set<number>()
-    for (const seg of segments) {
-      const inSeg = currentFi >= seg.first_frame && currentFi <= seg.last_frame
-      const nearStart = Math.abs(seg.first_frame - currentFi) <= nearWindow
-      const nearEnd = Math.abs(seg.last_frame - currentFi) <= nearWindow
-      if (inSeg || nearStart || nearEnd) ids.add(seg.id)
+    for (const track of tracks) {
+      const inTrack  = currentFi >= track.first_frame && currentFi <= track.last_frame
+      const nearStart = Math.abs(track.first_frame - currentFi) <= nearWindow
+      const nearEnd   = Math.abs(track.last_frame  - currentFi) <= nearWindow
+      if (inTrack || nearStart || nearEnd) ids.add(track.id)
     }
     return ids
-  }, [segments, currentFrame, fps])
+  }, [tracks, currentFrame, fps])
 
-  // Auto-scroll the table so the first highlighted row has at most 3 rows above it visible.
+  // Auto-scroll table so the first highlighted row has at most 3 rows above it visible.
   useEffect(() => {
     const container = tableRef.current
     if (!container) return
-    const firstIdx = segments.findIndex(seg => visibleSegmentIds.has(seg.id))
+    const firstIdx = tracks.findIndex(track => visibleTrackIds.has(track.id))
     if (firstIdx < 0) return
     const rows = container.querySelectorAll('tbody tr')
     const targetRow = rows[firstIdx] as HTMLElement | undefined
     if (!targetRow) return
     const rowHeight = targetRow.offsetHeight || 24
     container.scrollTop = Math.max(0, (firstIdx - 3) * rowHeight)
-  }, [visibleSegmentIds, segments])
+  }, [visibleTrackIds, tracks])
 
-  const deleteSegment = (id: number) => {
+  const deleteTrack = (id: number) => {
     setDeletedIds(prev => new Set([...prev, id]))
     setDeleteHistory(prev => [...prev, id])
     setDirty(true)
@@ -238,7 +244,7 @@ export default function Pass5Page() {
 
   const confirmRectDelete = () => {
     if (!pendingRectIds) return
-    pendingRectIds.forEach(id => deleteSegment(id))
+    pendingRectIds.forEach(id => deleteTrack(id))
     setPendingRectIds(null)
   }
 
@@ -280,9 +286,10 @@ export default function Pass5Page() {
     const x2 = Math.max(dragStart.x, dragCurrent.x)
     const y1 = Math.min(dragStart.y, dragCurrent.y)
     const y2 = Math.max(dragStart.y, dragCurrent.y)
-    const ids = segments
-      .filter(seg => seg.detections.some(d => d.cx >= x1 && d.cx <= x2 && d.cy >= y1 && d.cy <= y2))
-      .map(seg => seg.id)
+    // Hit-test against smooth points
+    const ids = tracks
+      .filter(track => track.smooth.some(([x, y]) => x >= x1 && x <= x2 && y >= y1 && y <= y2))
+      .map(track => track.id)
     if (ids.length > 0) setPendingRectIds(ids)
   }
 
@@ -302,14 +309,13 @@ export default function Pass5Page() {
       </button>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h1 style={{ margin: 0 }}>Pass 5 — Segment Building</h1>
+        <h1 style={{ margin: 0 }}>Pass 5 — Track Building</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {segData && (
+          {trackData && (
             <span style={{ fontSize: 13, color: '#555' }}>
-              {segments.length} segment{segments.length !== 1 ? 's' : ''}
+              {tracks.length} track{tracks.length !== 1 ? 's' : ''}
               {deletedIds.size > 0 && <span style={{ color: '#c00' }}> ({deletedIds.size} deleted)</span>}
-              {' · '}R={segData.R_px}px
-              {' · '}min {segData.min_segment_frames} frames
+              {' · '}{trackData.fps} fps
             </span>
           )}
           {isInFlight && (
@@ -339,7 +345,7 @@ export default function Pass5Page() {
           </button>
           <button
             onClick={() => { setAccepting(true); acceptPass5.mutate() }}
-            disabled={accepting || acceptPass5.isPending || !segData || isInFlight}
+            disabled={accepting || acceptPass5.isPending || !trackData || isInFlight}
             style={{ padding: '6px 18px', background: '#0a0', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
           >
             {accepting ? 'Accepting…' : 'Accept Pass 5 →'}
@@ -349,11 +355,11 @@ export default function Pass5Page() {
 
       <p style={{ color: '#666', fontSize: 13, margin: '0 0 12px' }}>
         Magenta circle: ball detection in current frame.
-        Cyan polyline: segments containing the current frame or with an endpoint within 8 frames (full segment shown).
-        Click a segment path to delete it. Drag a rectangle on the plot above to select and delete multiple segments.
+        Cyan polyline: tracks containing the current frame or with an endpoint within 8 frames (full track shown).
+        Click a track path to delete it. Drag a rectangle on the plot above to select and delete multiple tracks.
       </p>
 
-      {bgMedianUrl && bgWidth && bgHeight && segments.length > 0 && (
+      {bgMedianUrl && bgWidth && bgHeight && tracks.length > 0 && (
         <div style={{ position: 'relative', marginBottom: 12, border: '1px solid #ccc', borderRadius: 4, overflow: 'hidden' }}>
           <img
             src={bgMedianUrl}
@@ -372,14 +378,14 @@ export default function Pass5Page() {
             onMouseLeave={() => { setDragStart(null); setDragCurrent(null) }}
           >
             <rect x={0} y={0} width={bgWidth} height={bgHeight} fill="transparent" />
-            {segments.map((seg) => {
-              const pts = seg.detections.map(d => `${d.cx},${d.cy}`).join(' ')
-              const isPending = pendingRectSet.has(seg.id)
-              const hovered = seg.id === hoveredSegId && !pendingRectIds
+            {tracks.map((track) => {
+              const pts = track.smooth.map(([x, y]) => `${x},${y}`).join(' ')
+              const isPending = pendingRectSet.has(track.id)
+              const hovered = track.id === hoveredTrackId && !pendingRectIds
               const stroke = isPending ? '#ffff00' : hovered ? '#cc9900' : '#ff3300'
               return (
                 <polyline
-                  key={seg.id}
+                  key={track.id}
                   points={pts}
                   fill="none"
                   stroke={stroke}
@@ -387,11 +393,11 @@ export default function Pass5Page() {
                   strokeLinejoin="round"
                   strokeLinecap="round"
                   style={{ cursor: pendingRectIds ? 'default' : 'pointer' }}
-                  onClick={() => { if (!wasDraggingRef.current && !pendingRectIds) deleteSegment(seg.id) }}
-                  onMouseEnter={() => { if (!pendingRectIds) setHoveredSegId(seg.id) }}
-                  onMouseLeave={() => setHoveredSegId(null)}
+                  onClick={() => { if (!wasDraggingRef.current && !pendingRectIds) deleteTrack(track.id) }}
+                  onMouseEnter={() => { if (!pendingRectIds) setHoveredTrackId(track.id) }}
+                  onMouseLeave={() => setHoveredTrackId(null)}
                 >
-                  <title>Segment {seg.id + 1} — click to delete</title>
+                  <title>Track {track.id + 1} — click to delete</title>
                 </polyline>
               )
             })}
@@ -417,7 +423,7 @@ export default function Pass5Page() {
                 textAlign: 'center', minWidth: 260,
               }}>
                 <div style={{ fontSize: 15, marginBottom: 20 }}>
-                  Delete <strong>{pendingRectIds.length}</strong> segment{pendingRectIds.length !== 1 ? 's' : ''} in selection?
+                  Delete <strong>{pendingRectIds.length}</strong> track{pendingRectIds.length !== 1 ? 's' : ''} in selection?
                 </div>
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                   <button
@@ -447,7 +453,7 @@ export default function Pass5Page() {
         bgHeight={bgHeight}
         totalFrames={0}
         ballDetections={ballDetections}
-        segmentPaths={segmentPaths}
+        segmentPaths={trackPaths}
         onFrameChange={setCurrentFrame}
         storageKey={`pass5-pos-${projectId}`}
         rallyTimeline={{
@@ -457,9 +463,9 @@ export default function Pass5Page() {
       />
 
       {isLoading ? (
-        <div style={{ color: '#888', marginTop: 16 }}>Loading segments…</div>
-      ) : segments.length === 0 ? (
-        <div style={{ color: '#888', marginTop: 16 }}>No segments found.</div>
+        <div style={{ color: '#888', marginTop: 16 }}>Loading tracks…</div>
+      ) : tracks.length === 0 ? (
+        <div style={{ color: '#888', marginTop: 16 }}>No tracks found.</div>
       ) : (
         <div ref={tableRef} style={{ maxHeight: 280, overflowY: 'auto', marginTop: 16 }}>
           <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
@@ -467,59 +473,47 @@ export default function Pass5Page() {
               <tr>
                 <th style={th}>#</th>
                 <th style={{ ...th, textAlign: 'center' }} />
+                <th style={th}>Rally</th>
                 <th style={th}>Overlaps</th>
                 <th style={th}>First frame</th>
                 <th style={th}>Last frame</th>
                 <th style={th}>Detections</th>
-                <th style={th}>Span (frames)</th>
-                <th style={th}>Speed (px/fr)</th>
+                <th style={th}>Segments</th>
+                <th style={th}>Bounces</th>
               </tr>
             </thead>
             <tbody>
-              {segments.map((seg) => {
+              {tracks.map((track) => {
                 const currentFi = currentFrame - 1
-                const highlighted = currentFi >= seg.first_frame && currentFi <= seg.last_frame
-                const selected = seg.id === selectedSegId
+                const highlighted = currentFi >= track.first_frame && currentFi <= track.last_frame
+                const selected = track.id === selectedTrackId
                 return (
                   <tr
-                    key={seg.id}
+                    key={track.id}
                     style={{ borderBottom: '1px solid #eee', cursor: 'pointer', background: highlighted ? '#def' : undefined, fontWeight: selected ? 700 : undefined }}
-                    onClick={() => { setSelectedSegId(seg.id); playerRef.current?.seekToFrame(seg.first_frame + 1) }}
-                    title="Click to seek to segment start"
+                    onClick={() => { setSelectedTrackId(track.id); playerRef.current?.seekToFrame(track.first_frame + 1) }}
+                    title="Click to seek to track start"
                   >
-                    <td style={td}>{seg.id + 1}</td>
+                    <td style={td}>{track.id + 1}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <button
-                        onClick={(e) => { e.stopPropagation(); deleteSegment(seg.id) }}
-                        title="Delete segment"
+                        onClick={(e) => { e.stopPropagation(); deleteTrack(track.id) }}
+                        title="Delete track"
                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c00', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
                       >✕</button>
                     </td>
-                    <td style={{ ...td, color: overlapCounts[seg.id] > 0 ? '#c60' : '#444' }}>{overlapCounts[seg.id]}</td>
-                    <td style={td}>{seg.first_frame}</td>
-                    <td style={td}>{seg.last_frame}</td>
-                    <td style={td}>{seg.length}</td>
-                    <td style={td}>{seg.last_frame - seg.first_frame + 1}</td>
-                    <td style={td}>{seg.mean_speed_px_per_frame?.toFixed(1) ?? '—'}</td>
+                    <td style={td}>{track.rally_id + 1}</td>
+                    <td style={{ ...td, color: overlapCounts[track.id] > 0 ? '#c60' : '#444' }}>{overlapCounts[track.id]}</td>
+                    <td style={td}>{track.first_frame}</td>
+                    <td style={td}>{track.last_frame}</td>
+                    <td style={td}>{track.n_detections}</td>
+                    <td style={td}>{track.n_segments}</td>
+                    <td style={td}>{track.intersections.length}</td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
-        </div>
-      )}
-
-      {/* Corner plot: per-frame pos/vel/accel distributions */}
-      {segData && segData.segment_count > 0 && (
-        <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>
-            Kinematic corner plot — per-frame pos / vel / accel across all segments
-          </div>
-          <img
-            src={`${api.pass5CornerUrl(projectId!)}?t=${segData.segment_count}`}
-            style={{ maxWidth: '100%', border: '1px solid #ddd', borderRadius: 4 }}
-            alt="Kinematic corner plot"
-          />
         </div>
       )}
     </div>
