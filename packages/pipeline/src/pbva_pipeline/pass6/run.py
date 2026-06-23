@@ -88,43 +88,22 @@ def _render_overlay(
 
 
 # ---------------------------------------------------------------------------
-# Segment trail overlay
+# Track trail overlay
 # ---------------------------------------------------------------------------
-
-def _interp_detection(
-    detections: list[dict],
-    frame: int,
-) -> tuple[float, float] | None:
-    """Return interpolated (cx, cy) at *frame* within sorted segment detections.
-
-    Returns None if *frame* is outside [first_frame, last_frame].
-    """
-    if not detections:
-        return None
-    if frame < detections[0]["frame"] or frame > detections[-1]["frame"]:
-        return None
-    for i in range(len(detections) - 1):
-        d0, d1 = detections[i], detections[i + 1]
-        if d0["frame"] <= frame <= d1["frame"]:
-            if d0["frame"] == d1["frame"]:
-                return float(d0["cx"]), float(d0["cy"])
-            t = (frame - d0["frame"]) / (d1["frame"] - d0["frame"])
-            return d0["cx"] + t * (d1["cx"] - d0["cx"]), d0["cy"] + t * (d1["cy"] - d0["cy"])
-    return float(detections[-1]["cx"]), float(detections[-1]["cy"])
-
 
 def _render_trail_overlay(
     frame_bgr: np.ndarray,
     source_frame_number: int,
     fps: float,
-    segments: list[dict],
+    tracks: list[dict],
     trail_s: float = 1.0,
 ) -> np.ndarray | None:
-    """Render a yellow trailing trail for all segments overlapping the trailing window.
+    """Render a yellow trailing trail for all tracks overlapping the trailing window.
 
     The window covers the *trail_s* seconds (default 1.0 s, i.e. N = round(fps)
     frames) leading up to *source_frame_number* inclusive: [F-N+1 … F].
-    N-1 straight lines connect consecutive interpolated detection positions.
+    N-1 straight lines connect consecutive smooth positions looked up directly
+    from the track's smooth array (one entry per frame from smooth_first_frame).
     Opacity runs linearly from 5 % (oldest line) to 80 % (newest line);
     stroke width runs linearly from 1 px to 6 px over the same range.
     Lines are rendered with anti-aliasing (cv2.LINE_AA).
@@ -132,7 +111,7 @@ def _render_trail_overlay(
     Returns a BGRA uint8 array the same size as *frame_bgr*, or None if there
     is nothing to draw.
     """
-    if not segments:
+    if not tracks:
         return None
 
     h, w = frame_bgr.shape[:2]
@@ -142,23 +121,25 @@ def _render_trail_overlay(
     overlay = np.zeros((h, w, 4), dtype=np.uint8)
     has_any = False
 
-    for seg in segments:
-        first_frame = seg["first_frame"]
-        last_frame = seg["last_frame"]
+    for track in tracks:
+        first_frame = track["first_frame"]
+        last_frame  = track["last_frame"]
         if last_frame < win_start or first_frame > source_frame_number:
             continue
 
-        dets = seg["detections"]  # list of {frame, cx, cy, radius}
+        smooth      = track["smooth"]           # list of [cx, cy], one per frame
+        base_frame  = track["smooth_first_frame"]  # OpenCV frame of smooth[0]
+        n_smooth    = len(smooth)
 
         for i in range(N - 1):
             f0 = win_start + i
             f1 = f0 + 1
-            if f0 < first_frame or f1 > last_frame:
+            idx0 = f0 - base_frame
+            idx1 = f1 - base_frame
+            if not (0 <= idx0 < n_smooth and 0 <= idx1 < n_smooth):
                 continue
-            p0 = _interp_detection(dets, f0)
-            p1 = _interp_detection(dets, f1)
-            if p0 is None or p1 is None:
-                continue
+            p0 = smooth[idx0]
+            p1 = smooth[idx1]
             t_frac = i / (N - 2) if N > 2 else 1.0
             opacity = 0.05 + 0.75 * t_frac
             line_w = max(1, round(1 + 5 * t_frac))
@@ -632,11 +613,11 @@ class Pass6:
         if not rallies:
             raise ValueError("No rallies found in pass2/accepted/rally.json")
 
-        # Load pass5 accepted segments for trail overlay (optional).
-        segments_path = ctx.paths.project_root / "passes" / "pass5" / "accepted" / "segments.json"
-        accepted_segments: list[dict] = []
-        if segments_path.exists():
-            accepted_segments = json.loads(segments_path.read_text()).get("segments", [])
+        # Load pass5 accepted tracks for trail overlay (optional).
+        tracks_path = ctx.paths.project_root / "passes" / "pass5" / "accepted" / "tracks.json"
+        accepted_tracks: list[dict] = []
+        if tracks_path.exists():
+            accepted_tracks = json.loads(tracks_path.read_text()).get("tracks", [])
 
         raw_dir = ctx.paths.pass_raw_dir
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -870,7 +851,7 @@ class Pass6:
 
                 # Extension-point overlay (ball tracking, etc.) — applied
                 # before blending so it fades naturally with the video.
-                overlay = _render_trail_overlay(bgr, src_frame_num, fps, accepted_segments)
+                overlay = _render_trail_overlay(bgr, src_frame_num, fps, accepted_tracks)
                 if overlay is None:
                     overlay = _render_overlay(bgr, rally_idx, src_frame_num, out_frame_idx, rally)
                 if overlay is not None:
